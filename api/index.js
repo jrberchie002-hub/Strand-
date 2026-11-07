@@ -110,6 +110,18 @@ const ROLES = { owner: 'Owner', admin: 'Admin', manager: 'Store manager', sales:
 const PERM_ALL = ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'pay_settings', 'analytics', 'team', 'settings', 'design', 'apps', 'domain', 'policies', 'notify', 'security', 'billing'];
 const PERMS = { owner: PERM_ALL, admin: PERM_ALL.filter(x => x !== 'billing'), manager: ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'analytics', 'policies', 'notify'], sales: ['orders', 'orders_edit', 'pos', 'pay_view', 'pay_confirm', 'analytics'], cashier: ['orders', 'pos', 'pay_confirm'], assistant: ['orders', 'orders_edit'], inventory: ['stock'], developer: ['design', 'apps', 'domain'] };
 const hasPerm = (role, x) => (PERMS[role] || []).includes(x);
+/* ---------- Strand's own platform team (separate from any shop's staff) ---------- */
+const PLAT_ROLES = { owner: 'Owner', support: 'Support', moderator: 'Moderator' };
+const PLAT_PERM_ALL = ['shops_view', 'shops_edit', 'requests', 'team', 'control'];
+const PLAT_PERMS = { owner: PLAT_PERM_ALL, moderator: ['shops_view', 'shops_edit', 'requests'], support: ['shops_view', 'requests'] };
+const hasPlatPerm = (role, x) => (PLAT_PERMS[role] || []).includes(x);
+async function platStaff() { return (await kvGet('plat:staff')) || { l: [] }; }
+async function platAuth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'platform') return null; const ps2 = await platStaff(); const m = ps2.l.find(x => x.id === t.id); if (!m || m.off || (t.uv | 0) !== (m.uv | 0)) return null; return m; }
+const platTok = m => sign({ r: 'platform', id: m.id, uv: m.uv | 0, exp: Date.now() + 14 * 864e5 });
+/* ---------- customer (shopper) accounts: one account can order from any shop on Strand ---------- */
+async function custAuth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'customer') return null; const c = await kvGet('cust:' + t.id); if (!c || c.deleted || (t.sv | 0) !== (c.sv | 0)) return null; return c; }
+const custTok = c => sign({ r: 'customer', id: c.id, sv: c.sv | 0, exp: Date.now() + 30 * 864e5 });
+const custAcctKey = id => { const e = emailKey(id); if (e) return 'cu:email:' + e; const p = phoneKey(id); return p ? 'cu:phone:' + p : ''; };
 const planOf = s => { const p = s.plan || 'base'; if (p === 'base') return 'base'; if (s.paidUntil && Date.parse(s.paidUntil) + 3 * 864e5 < Date.now()) return 'base'; return p; };
 const NOTE_PERM = { order: 'orders', lowstock: 'stock', payment: 'pay_view', team: 'security', security: 'security', billing: 'billing' };
 async function note(s, type, text) { try { const pr = s.notify || {}; if (pr[type] === false) return; const x = (await kvGet('notes:' + s.slug)) || { l: [] }; x.l.unshift({ id: 'n' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex'), at: new Date().toISOString(), type, text: str(text, 160), read: false }); x.l = x.l.slice(0, 100); await kvSet('notes:' + s.slug, x); if (pr.email && s.email && E.RESEND_API_KEY && (type === 'order' || type === 'security')) { fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [s.email], subject: str(text, 70), text: str(text, 300) + '\n\nOpen your shop to see more.' }) }).catch(() => {}); } } catch (e) {} }
@@ -163,14 +175,24 @@ const isAdmin = h => E.STORES_ADMIN && String(E.STORES_ADMIN).length >= 16 && St
 /* ---------- handler ---------- */
 /* ---------- link to the command center (Neutron): signed orders only; the first link happens automatically from NEUTRON_LINK_CODE ---------- */
 const ctlGet = async () => (await kvGet('ctl')) || { banner: '', maint: false };
+// Shared aggregation used by both the browser platform dashboard (/api/platform/overview) and the
+// signed external command-center channel (station.js), so the two always show the same numbers.
+async function platformReport(withGmv) {
+  const x = (await kvGet('idx')) || { l: [] }, day = new Date().toISOString().slice(0, 10), c = await ctlGet();
+  let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0; const plans = { base: 0, pro: 0, expert: 0 };
+  let gmvToday = 0, gmv30d = 0, gmvAll = 0, since30 = Date.now() - 30 * 864e5;
+  for (const sl of x.l.slice(0, 400)) {
+    const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)]++; if (s.verified) verified++; if (s.open === false) closed++; if (s.domain && s.domain.status === 'pending') dom++; if (String(s.createdAt || '').slice(0, 10) === day) newToday++;
+    if (withGmv) { const ord = (await kvGet('orders:' + sl)) || { l: [] }; for (const o of ord.l) { if (o.status === 'cancelled') continue; gmvAll += o.total; if (Date.parse(o.at) >= since30) gmv30d += o.total; if (o.at.slice(0, 10) === day) gmvToday += o.total; } }
+  }
+  const rq = (await kvGet('reqs')) || { l: [] };
+  const out = { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: fbOn() ? 'firestore' : 'memory', images: sbOn() ? 'supabase' : 'inline', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
+  if (withGmv) out.gmv = { today: Math.round(gmvToday * 100) / 100, last30d: Math.round(gmv30d * 100) / 100, allTime: Math.round(gmvAll * 100) / 100 };
+  return out;
+}
 const STN = require('../station')({
   kvGet: async k => (await kvGet('sys:' + k)) || null, kvSet: async (k, v) => { await kvSet('sys:' + k, v); }, kvDel: async k => { await kvSet('sys:' + k, null); },
-  report: async () => {
-    const x = (await kvGet('idx')) || { l: [] }, day = new Date().toISOString().slice(0, 10), c = await ctlGet(); let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0; const plans = { base: 0, pro: 0, expert: 0 };
-    for (const sl of x.l) { const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)]++; if (s.verified) verified++; if (s.open === false) closed++; if (s.domain && s.domain.status === 'pending') dom++; if (String(s.createdAt || '').slice(0, 10) === day) newToday++; }
-    const rq = (await kvGet('reqs')) || { l: [] };
-    return { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: fbOn() ? 'firestore' : 'memory', images: sbOn() ? 'supabase' : 'inline', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
-  },
+  report: async () => platformReport(false),
   command: async (c, a, by) => {
     const cur = await ctlGet(), t = (x, n) => String(x == null ? '' : x).slice(0, n);
     if (c === 'ping') return { pong: Date.now() };
@@ -305,10 +327,13 @@ const handler = async (event) => {
       const methods = payMethods(s), method = methods.includes(b.pay) ? b.pay : methods[methods.length - 1] || 'cod';
       const shipsItem = items.map(i => s.products.find(x => x.id === i.id)).find(pr => pr && pr.ships);
       const ord = (await kvGet('orders:' + s.slug)) || { l: [] }; let no = orderNo(s); while (ord.l.some(x => x.no === no)) no = orderNo(s);
-      const o = { no, items, sub, disc, code, fee, total, name: str(b.name, 60), phone: str(b.phone, 20), address: str(b.address, 160), note: str(b.note, 200), status: 'new', src: 'shop', pay: method, paid: false, ships: !!shipsItem, eta: shipsItem ? shipsItem.eta || '' : '', at: new Date().toISOString() };
+      const cust = await custAuth(h); // optional: a logged-in shopper's order is linked to their account automatically
+      const o = { no, items, sub, disc, code, fee, total, name: str(b.name, 60) || (cust ? cust.name : ''), phone: str(b.phone, 20) || (cust ? cust.phone : ''), address: str(b.address, 160) || (cust && !b.address ? (cust.addresses || [])[0] && (cust.addresses[0].line) || '' : ''), note: str(b.note, 200), status: 'new', src: 'shop', pay: method, paid: false, ships: !!shipsItem, eta: shipsItem ? shipsItem.eta || '' : '', at: new Date().toISOString() };
+      if (cust) o.custId = cust.id;
       if (!o.name || phoneKey(o.phone) === '') return J(400, { error: 'Add your name and phone number so the shop can reach you.' });
       ord.l.unshift(o); ord.l = ord.l.slice(0, 500); await kvSet('orders:' + s.slug, ord);
-      custWelcomeMail(s, o, b.email);
+      if (cust) { const ci = (await kvGet('custorders:' + cust.id)) || { l: [] }; ci.l.unshift({ slug: s.slug, shop: s.name, no, at: o.at }); ci.l = ci.l.slice(0, 300); await kvSet('custorders:' + cust.id, ci); if (b.saveAddress && o.address) { cust.addresses = cust.addresses || []; if (!cust.addresses.some(a => a.line === o.address)) { cust.addresses.unshift({ id: 'a' + crypto.randomBytes(3).toString('hex'), label: str(b.addressLabel, 20) || 'Address', line: o.address, phone: o.phone }); cust.addresses = cust.addresses.slice(0, 10); await kvSet('cust:' + cust.id, cust); } } }
+      custWelcomeMail(s, o, b.email || cust && cust.email || '');
       await note(s, 'order', 'New order ' + no + ' · GH₵ ' + total + ' from ' + o.name); for (const it of items) { const pr2 = s.products.find(x => x.id === it.id); if (pr2 && pr2.stock != null && pr2.stock <= 3) await note(s, 'lowstock', pr2.name + ' is running low (' + pr2.stock + ' left)'); }
       const msg = 'New order ' + no + '\n' + items.map(i => i.qty + ' x ' + i.name + ' (GH₵ ' + i.price * i.qty + ')').join('\n') + '\nTotal: GH₵ ' + total + '\nName: ' + o.name + '\nPhone: ' + o.phone + (o.address ? '\nAddress: ' + o.address : '') + (o.note ? '\nNote: ' + o.note : '');
       const out = { ok: true, no, total, pay: method, ships: o.ships, eta: o.eta }; if (s.wa !== false && s.phone) out.wa ='https://wa.me/' + s.phone + '?text=' + encodeURIComponent(msg + '\nPayment: ' + ({ paystack: 'online (card or mobile money)', momo: 'mobile money', link: 'payment link', cod: 'pay on delivery' })[method]); else if (s.phone) out.call = s.phone; out.contact = o.phone;
@@ -331,6 +356,171 @@ const handler = async (event) => {
       if (M === 'POST' && p === '/api/admin/shop') { const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' }); if (PLANS.includes(b.plan)) st.plan = b.plan; if (THEMES.includes(b.theme)) st.theme = b.theme; if (typeof b.verified === 'boolean') st.verified = b.verified; if (b.paidUntil !== undefined) st.paidUntil = /^\d{4}-\d{2}-\d{2}/.test(b.paidUntil) ? new Date(b.paidUntil).toISOString() : ''; if (b.invoice && typeof b.invoice === 'object') { const iv = (await kvGet('inv:' + st.slug)) || { l: [] }; iv.l.unshift({ id: 'M' + Date.now().toString(36), plan: str(b.invoice.plan, 10), amount: Math.max(0, +b.invoice.amount || 0), at: new Date().toISOString(), via: str(b.invoice.via, 30) || 'Manual' }); await kvSet('inv:' + st.slug, iv); } if (b.domainStatus && st.domain) { st.domain.status = b.domainStatus === 'active' ? 'active' : 'pending'; await kvSet('domain:' + st.domain.name, { slug: st.slug, status: st.domain.status }); await note(st, 'billing', 'Your domain ' + st.domain.name + ' is ' + st.domain.status); } if (b.design && typeof b.design === 'object') { for (const k of ['announce']) if (b.design[k] !== undefined) st[k] = str(b.design[k], 90); for (const k of ['hero', 'banner']) if (b.design[k]) st[k] = Object.assign(st[k] || {}, { title: str(b.design[k].title, 80), sub: str(b.design[k].sub, 140), cta: str(b.design[k].cta, 24) }); if (/^#[0-9a-f]{6}$/i.test(b.design.accent || '')) st.accent = b.design.accent; } await kvSet('store:' + st.slug, st); return J(200, { ok: true }); }
       if (M === 'GET' && p === '/api/admin/requests') return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l });
       if (M === 'POST' && p === '/api/admin/request') { const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
+    }
+    /* ---------- customer accounts: any shopper, any shop ---------- */
+    if (p.startsWith('/api/customer')) {
+      if (M === 'POST' && p === '/api/customer/signup') {
+        if (limited(ip, 'cs', 8, 3600e3)) return J(429, { error: 'Too many tries. Wait a little and try again.' });
+        if (b.hp) return J(400, { error: 'That did not look right. Try again.' });
+        const ph = phoneKey(b.phone), em = emailKey(b.email), name = str(b.name, 50), pw = String(b.pin || '');
+        if (name.length < 2) return J(400, { error: 'Tell us your name.' });
+        if (b.phone && !ph) return J(400, { error: 'That phone number does not look right.' }); if (b.email && !em) return J(400, { error: 'That email does not look right.' });
+        if (!ph && !em) return J(400, { error: 'Add a phone number or an email so you can log in.' });
+        const pe = passOk(pw); if (pe) return J(400, { error: pe });
+        if ((ph && await kvGet('cu:phone:' + ph)) || (em && await kvGet('cu:email:' + em))) return J(409, { error: 'An account with those details already exists. Log in instead.' });
+        const id = 'c' + crypto.randomBytes(6).toString('hex'), salt = crypto.randomBytes(16).toString('hex');
+        const c = { id, name, email: em, phone: ph, salt, pin: pinHash(pw, salt), addresses: [], sv: 0, createdAt: new Date().toISOString() };
+        await kvSet('cust:' + id, c); if (ph) await kvSet('cu:phone:' + ph, { id }); if (em) await kvSet('cu:email:' + em, { id });
+        await secLog('customer:' + id, 'Account created', ip);
+        return J(200, { token: custTok(c), name: c.name });
+      }
+      if (M === 'POST' && p === '/api/customer/login') {
+        if (limited(ip, 'cl', 12, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+        const key = custAcctKey(b.id || b.phone), lk = 'cfail:' + (key || 'x'), f = (await kvGet(lk)) || { n: 0, until: 0 };
+        if (f.until > Date.now()) return J(429, { error: 'Too many wrong tries. This account is locked for a while. Try again later.' });
+        const idx = key && await kvGet(key), c = idx && await kvGet('cust:' + idx.id);
+        const salt = c ? c.salt : FAKE_SALT, calc = pinHash(String(b.pin || '').slice(0, 64), salt), good = c && calc.length === c.pin.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(c.pin));
+        if (!good) { if (key) { f.n++; if (f.n >= 5) f.until = Date.now() + Math.min(864e5, 15 * 60e3 * Math.pow(2, f.n - 5)); await kvSet(lk, f); } if (c) await secLog('customer:' + c.id, f.until > Date.now() ? 'Account locked after wrong passwords' : 'Wrong password', ip); return J(401, { error: "We couldn't find an account with those details. Check them and try again." }); }
+        if (f.n) await kvSet(lk, null); if (c.deleted) return J(401, { error: 'This account has been closed.' });
+        if (E.RESEND_API_KEY && emailKey(c.email)) {
+          const code = genOtp(), chal = 'cc' + crypto.randomBytes(10).toString('hex');
+          await kvSet('cuotp:' + chal, { id: c.id, code: sha(code), exp: Date.now() + 10 * 60e3, tries: 0 });
+          await sendOtpMail(c.email, code); await secLog('customer:' + c.id, 'Login code sent', ip);
+          return J(200, { otp: true, challenge: chal, email: c.email.replace(/^(.)[^@]*(@.*)$/, '$1***$2') });
+        }
+        await secLog('customer:' + c.id, 'Logged in', ip);
+        return J(200, { token: custTok(c), name: c.name });
+      }
+      if (M === 'POST' && p === '/api/customer/login/verify') {
+        if (limited(ip, 'cv', 20, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+        const chal = str(b.challenge, 24), rec = chal && await kvGet('cuotp:' + chal);
+        if (!rec || rec.exp < Date.now()) return J(400, { error: 'That code has expired. Log in again.' });
+        const c = await kvGet('cust:' + rec.id); if (!c || c.deleted) return J(401, { error: 'This account has been closed.' });
+        const good = sha(str(b.code, 6)) === rec.code;
+        if (!good) { rec.tries = (rec.tries | 0) + 1; if (rec.tries >= 5) { await kvSet('cuotp:' + chal, null); return J(400, { error: 'Too many wrong codes. Log in again.' }); } await kvSet('cuotp:' + chal, rec); return J(400, { error: 'That code is not right.' }); }
+        await kvSet('cuotp:' + chal, null); await secLog('customer:' + c.id, 'Logged in', ip); return J(200, { token: custTok(c), name: c.name });
+      }
+      const cu = await custAuth(h);
+      if (!cu) return J(401, { error: 'Please log in again.' });
+      if (M === 'GET' && p === '/api/customer/me') return J(200, { name: cu.name, email: cu.email || '', phone: cu.phone || '', addresses: cu.addresses || [] });
+      if (M === 'POST' && p === '/api/customer/address') {
+        cu.addresses = cu.addresses || [];
+        if (b.del) { cu.addresses = cu.addresses.filter(a => a.id !== b.del); await kvSet('cust:' + cu.id, cu); return J(200, { ok: true }); }
+        const line = str(b.line, 160); if (!line) return J(400, { error: 'Add the address.' });
+        if (cu.addresses.length >= 10 && !b.id) return J(400, { error: 'You can save up to 10 addresses.' });
+        let a = b.id && cu.addresses.find(x => x.id === b.id); if (!a) { a = { id: 'a' + crypto.randomBytes(3).toString('hex') }; cu.addresses.unshift(a); }
+        Object.assign(a, { label: str(b.label, 20) || 'Address', line, phone: str(b.phone, 20) || cu.phone || '' });
+        await kvSet('cust:' + cu.id, cu); return J(200, { ok: true, id: a.id });
+      }
+      if (M === 'GET' && p === '/api/customer/orders') {
+        const ci = (await kvGet('custorders:' + cu.id)) || { l: [] }, out = [];
+        for (const r of ci.l.slice(0, 100)) { const ord = (await kvGet('orders:' + r.slug)) || { l: [] }, o = ord.l.find(x => x.no === r.no); if (o) out.push({ slug: r.slug, shop: r.shop, no: o.no, at: o.at, total: o.total, status: o.status, paid: !!o.paid, eta: o.eta || '', items: o.items }); }
+        return J(200, { orders: out });
+      }
+      if (M === 'GET' && p === '/api/customer/order') {
+        const q = event.queryStringParameters || {}, slug = str(q.slug, 40), no = str(q.no, 12); const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no);
+        if (!o || o.custId !== cu.id) return J(404, { error: 'Order not found.' });
+        return J(200, { order: Object.assign({ slug }, o) });
+      }
+      if (p === '/api/customer/security' && M === 'POST') {
+        if (limited(ip, 'csc', 10, 900e3)) return J(429, { error: 'Too many tries. Wait a few minutes.' });
+        if (b.action === 'logout_all') { cu.sv = (cu.sv | 0) + 1; await kvSet('cust:' + cu.id, cu); await secLog('customer:' + cu.id, 'Logged out of all devices', ip); return J(200, { ok: true, token: custTok(cu) }); }
+        if (b.action === 'password') { const old = pinHash(String(b.old || '').slice(0, 64), cu.salt); if (old.length !== cu.pin.length || !crypto.timingSafeEqual(Buffer.from(old), Buffer.from(cu.pin))) return J(400, { error: 'Your current password is not right.' }); const pe = passOk(b.next); if (pe) return J(400, { error: pe }); cu.salt = crypto.randomBytes(16).toString('hex'); cu.pin = pinHash(String(b.next), cu.salt); cu.sv = (cu.sv | 0) + 1; await kvSet('cust:' + cu.id, cu); await secLog('customer:' + cu.id, 'Password changed', ip); return J(200, { ok: true, token: custTok(cu) }); }
+        return J(400, { error: 'Try again.' });
+      }
+      return J(404, { error: 'Not found' });
+    }
+    // Guest order tracking, no login needed: requires the last digits of the phone number used on the order, so a bare order number alone can't be used to pull someone else's details.
+    if (M === 'GET' && p === '/api/track') {
+      if (limited(ip, 'tr', 30, 600e3)) return J(429, { error: 'Slow down a little.' });
+      const q = event.queryStringParameters || {}, slug = str(q.slug, 40), no = str(q.no, 12), phone = str(q.phone, 20);
+      const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no);
+      if (!o || !phone || phoneKey(phone) !== phoneKey(o.phone)) return J(404, { error: "We couldn't find that order. Check the order number and phone number." });
+      return J(200, { order: { no: o.no, at: o.at, total: o.total, status: o.status, paid: !!o.paid, eta: o.eta || '', items: o.items } });
+    }
+    /* ---------- Strand's own platform team and dashboard ---------- */
+    if (p.startsWith('/api/platform')) {
+      if (M === 'POST' && p === '/api/platform/setup') {
+        // one-time bootstrap: only works while no platform staff exist yet, and only with the break-glass STORES_ADMIN key
+        if (!isAdmin(h)) { if (limited(ip, 'ad', 8, 600e3)) return J(429, { error: 'Too many tries.' }); return J(404, { error: 'Not found' }); }
+        const ps0 = await platStaff(); if (ps0.l.length) return J(409, { error: 'The platform team already has an owner. Log in instead.' });
+        const key = acctKey(b.email || b.phone), nm = str(b.name, 50), pw = String(b.pin || '');
+        if (!key || nm.length < 2) return J(400, { error: 'Add a name and an email or phone number.' }); const pe = passOk(pw); if (pe) return J(400, { error: pe });
+        const salt = crypto.randomBytes(16).toString('hex'), id = 'po' + crypto.randomBytes(4).toString('hex');
+        const m = { id, name: nm, key, role: 'owner', salt, pin: pinHash(pw, salt), uv: 0, createdAt: new Date().toISOString() };
+        ps0.l.push(m); await kvSet('plat:staff', ps0); await secLog('platform', 'Platform owner account created: ' + nm, ip);
+        return J(200, { token: platTok(m), name: m.name });
+      }
+      if (M === 'POST' && p === '/api/platform/login') {
+        if (limited(ip, 'pl', 12, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+        const key = acctKey(b.id || b.phone), lk = 'pfail:' + (key || 'x'), f = (await kvGet(lk)) || { n: 0, until: 0 };
+        if (f.until > Date.now()) return J(429, { error: 'Too many wrong tries. Try again later.' });
+        const ps1 = await platStaff(), m = key && ps1.l.find(x => x.key === key);
+        const salt = m ? m.salt : FAKE_SALT, calc = pinHash(String(b.pin || '').slice(0, 64), salt), good = m && calc.length === m.pin.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(m.pin));
+        if (!good) { if (key) { f.n++; if (f.n >= 5) f.until = Date.now() + Math.min(864e5, 15 * 60e3 * Math.pow(2, f.n - 5)); await kvSet(lk, f); } await secLog('platform', 'Wrong platform login attempt', ip); return J(401, { error: "We couldn't find an account with those details." }); }
+        if (f.n) await kvSet(lk, null); if (m.off) return J(401, { error: 'This account has been suspended.' });
+        const otpEmail = key.startsWith('email:') ? key.slice(6) : '';
+        if (E.RESEND_API_KEY && otpEmail) {
+          const code = genOtp(), chal = 'pc' + crypto.randomBytes(10).toString('hex');
+          await kvSet('plotp:' + chal, { id: m.id, code: sha(code), exp: Date.now() + 10 * 60e3, tries: 0 });
+          await sendOtpMail(otpEmail, code);
+          return J(200, { otp: true, challenge: chal, email: otpEmail.replace(/^(.)[^@]*(@.*)$/, '$1***$2') });
+        }
+        m.lastLogin = new Date().toISOString(); await kvSet('plat:staff', ps1); await secLog('platform', 'Logged in (' + m.name + ')', ip);
+        return J(200, { token: platTok(m), name: m.name, role: m.role });
+      }
+      if (M === 'POST' && p === '/api/platform/login/verify') {
+        if (limited(ip, 'pv2', 20, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+        const chal = str(b.challenge, 24), rec = chal && await kvGet('plotp:' + chal);
+        if (!rec || rec.exp < Date.now()) return J(400, { error: 'That code has expired. Log in again.' });
+        const ps2 = await platStaff(), m = ps2.l.find(x => x.id === rec.id); if (!m) return J(400, { error: 'That code is no longer valid. Log in again.' });
+        const good = sha(str(b.code, 6)) === rec.code;
+        if (!good) { rec.tries = (rec.tries | 0) + 1; if (rec.tries >= 5) { await kvSet('plotp:' + chal, null); return J(400, { error: 'Too many wrong codes. Log in again.' }); } await kvSet('plotp:' + chal, rec); return J(400, { error: 'That code is not right.' }); }
+        await kvSet('plotp:' + chal, null); m.lastLogin = new Date().toISOString(); await kvSet('plat:staff', ps2); await secLog('platform', 'Logged in (' + m.name + ')', ip);
+        return J(200, { token: platTok(m), name: m.name, role: m.role });
+      }
+      if (M === 'GET' && p === '/api/platform/needs-setup') { const ps3 = await platStaff(); return J(200, { needsSetup: !ps3.l.length }); }
+      const pm = await platAuth(h);
+      if (!pm) return J(401, { error: 'Please log in again.' });
+      const pcan = x => hasPlatPerm(pm.role, x);
+      if (M === 'GET' && p === '/api/platform/me') return J(200, { name: pm.name, role: pm.role, roleName: PLAT_ROLES[pm.role], perms: PLAT_PERM_ALL.filter(pcan) });
+      if (M === 'GET' && p === '/api/platform/overview') { if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' }); return J(200, await platformReport(true)); }
+      if (M === 'GET' && p === '/api/platform/shops') {
+        if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' }); const x = (await kvGet('idx')) || { l: [] }; const out = [];
+        for (const sl of x.l) { const st = await kvGet('store:' + sl); if (!st) continue; const o = (await kvGet('orders:' + sl)) || { l: [] }; out.push({ slug: sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', plan: st.plan || 'base', theme: st.theme || 'classic', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, createdAt: st.createdAt || '' }); }
+        return J(200, { shops: out });
+      }
+      if (M === 'POST' && p === '/api/platform/shop') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to change shops.' }); const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' });
+        if (PLANS.includes(b.plan)) st.plan = b.plan; if (typeof b.verified === 'boolean') st.verified = b.verified; if (typeof b.open === 'boolean') st.open = b.open; if (b.paidUntil !== undefined) st.paidUntil = /^\d{4}-\d{2}-\d{2}/.test(b.paidUntil) ? new Date(b.paidUntil).toISOString() : '';
+        await kvSet('store:' + st.slug, st); await secLog('platform', 'Changed shop ' + st.slug + ' (' + pm.name + ')', ip); return J(200, { ok: true });
+      }
+      if (M === 'GET' && p === '/api/platform/requests') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l }); }
+      if (M === 'POST' && p === '/api/platform/request') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
+      if (p === '/api/platform/team') {
+        if (M === 'GET') { if (!pcan('team')) return J(403, { error: 'You do not have access to the team.' }); const ps4 = await platStaff(); return J(200, { team: ps4.l.map(x => ({ id: x.id, name: x.name, role: x.role, off: !!x.off, lastLogin: x.lastLogin || '', login: String(x.key || '').replace(/^(phone|email):/, '').replace(/^(.{3}).*(.{3})$/, '$1•••$2') })) }); }
+        if (!pcan('team') || pm.role !== 'owner') return J(403, { error: 'Only the owner can manage the platform team.' });
+        const ps5 = await platStaff();
+        if (b.del) { if (b.del === pm.id) return J(400, { error: 'You cannot remove yourself.' }); const m2 = ps5.l.find(x => x.id === b.del); if (m2) { ps5.l = ps5.l.filter(x => x.id !== b.del); await kvSet(m2.key, null); await kvSet('plat:staff', ps5); await secLog('platform', 'Platform team member removed: ' + m2.name, ip); } return J(200, { ok: true }); }
+        if (b.id) { const m2 = ps5.l.find(x => x.id === b.id); if (!m2) return J(404, { error: 'Not found.' });
+          if (b.off !== undefined) { m2.off = !!b.off; m2.uv = (m2.uv | 0) + 1; await secLog('platform', (m2.off ? 'Suspended ' : 'Reactivated ') + m2.name, ip); }
+          if (b.role !== undefined && PLAT_ROLES[b.role]) { m2.role = b.role; m2.uv = (m2.uv | 0) + 1; await secLog('platform', m2.name + ' is now ' + PLAT_ROLES[b.role], ip); }
+          await kvSet('plat:staff', ps5); return J(200, { ok: true }); }
+        const key2 = acctKey(b.email || b.phone), nm2 = str(b.name, 50), pin2 = String(b.pin || '');
+        if (!key2 || nm2.length < 2 || !PLAT_ROLES[b.role]) return J(400, { error: 'Add a name, an email or phone, a password and pick a role.' }); const pe2 = passOk(pin2); if (pe2) return J(400, { error: pe2 });
+        if (ps5.l.length >= 25) return J(400, { error: 'The platform team is limited to 25 people.' }); if (ps5.l.some(x => x.key === key2) || await kvGet(key2)) return J(409, { error: 'Those details are already used.' });
+        const salt2 = crypto.randomBytes(16).toString('hex'), id2 = 'po' + crypto.randomBytes(4).toString('hex');
+        ps5.l.push({ id: id2, name: nm2, key: key2, role: b.role, salt: salt2, pin: pinHash(pin2, salt2), uv: 0, createdAt: new Date().toISOString() });
+        await kvSet('plat:staff', ps5); await secLog('platform', 'Platform team member added: ' + nm2 + ' (' + PLAT_ROLES[b.role] + ')', ip); return J(200, { ok: true });
+      }
+      if (p === '/api/platform/security') {
+        if (M === 'GET') return J(200, { log: ((await kvGet('sec:platform')) || { l: [] }).l });
+        if (limited(ip, 'psc', 10, 900e3)) return J(429, { error: 'Too many tries. Wait a few minutes.' });
+        if (b.action === 'logout_all') { pm.uv = (pm.uv | 0) + 1; const ps6 = await platStaff(); const m3 = ps6.l.find(x => x.id === pm.id); if (m3) m3.uv = pm.uv; await kvSet('plat:staff', ps6); await secLog('platform', 'Logged out of all devices (' + pm.name + ')', ip); return J(200, { ok: true, token: platTok(pm) }); }
+        if (b.action === 'password') { const old = pinHash(String(b.old || '').slice(0, 64), pm.salt); if (old.length !== pm.pin.length || !crypto.timingSafeEqual(Buffer.from(old), Buffer.from(pm.pin))) return J(400, { error: 'Your current password is not right.' }); const pe3 = passOk(b.next); if (pe3) return J(400, { error: pe3 }); const ps7 = await platStaff(); const m4 = ps7.l.find(x => x.id === pm.id); m4.salt = crypto.randomBytes(16).toString('hex'); m4.pin = pinHash(String(b.next), m4.salt); m4.uv = (m4.uv | 0) + 1; await kvSet('plat:staff', ps7); await secLog('platform', 'Password changed (' + pm.name + ')', ip); return J(200, { ok: true, token: platTok(m4) }); }
+        return J(400, { error: 'Try again.' });
+      }
+      return J(404, { error: 'Not found' });
     }
     const s = await auth(h);
     if (p.startsWith('/api/seller')) {
