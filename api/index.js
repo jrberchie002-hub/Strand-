@@ -103,6 +103,8 @@ const emailKey = e => { e = String(e || '').trim().toLowerCase(); return e.lengt
 const acctKey = id => { const e = emailKey(id); if (e) return 'email:' + e; const p = phoneKey(id); return p ? 'phone:' + p : ''; };
 const maskIp = ip => String(ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.x.x').replace(/(:[0-9a-f]*){4}$/i, ':x:x:x:x').slice(0, 24);
 async function secLog(slug, what, ip) { try { const x = (await kvGet('sec:' + slug)) || { l: [] }; x.l.unshift({ at: new Date().toISOString(), what, ip: maskIp(ip) }); x.l = x.l.slice(0, 30); await kvSet('sec:' + slug, x); } catch (e) {} }
+const genOtp = () => String(crypto.randomInt(0, 1e6)).padStart(6, '0');
+async function sendOtpMail(email, code) { try { if (!E.RESEND_API_KEY) return false; await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [email], subject: 'Your Strand login code: ' + code, text: 'Your one-time code to log in to Strand is:\n\n' + code + '\n\nIt expires in 10 minutes. If this was not you, ignore this email and your account stays safe.' }) }); return true; } catch (e) { return false; } }
 const FAKE_SALT = 'f'.repeat(24);
 const ROLES = { owner: 'Owner', admin: 'Admin', manager: 'Store manager', sales: 'Sales manager', cashier: 'Cashier', assistant: 'Assistant', inventory: 'Stock keeper', developer: 'Developer' };
 const PERM_ALL = ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'pay_settings', 'analytics', 'team', 'settings', 'design', 'apps', 'domain', 'policies', 'notify', 'security', 'billing'];
@@ -221,8 +223,28 @@ const handler = async (event) => {
       const l = key && await kvGet(key), s = l && await kvGet('store:' + l.slug), who = s && (l.staff ? (s.staff || []).find(x => x.id === l.staff) : s);
       const salt = who ? who.salt : FAKE_SALT, calc = pinHash(String(b.pin || '').slice(0, 64), salt), good = who && calc.length === who.pin.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(who.pin));
       if (!good) { if (key) { f.n++; if (f.n >= 5) f.until = Date.now() + Math.min(864e5, 15 * 60e3 * Math.pow(2, f.n - 5)); await kvSet(lk, f); } if (s) await secLog(s.slug, f.until > Date.now() ? 'Account locked after wrong passwords' : 'Wrong password', ip); return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); }
-      if (f.n) await kvSet(lk, null); if (who && who.off) return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); if (s && s.deleted) return J(401, { error: 'This account has been closed.' }); const role = l.staff ? who.role : 'owner'; if (l.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (l.staff ? ' (' + who.name + ')' : ''), ip);
+      if (f.n) await kvSet(lk, null); if (who && who.off) return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); if (s && s.deleted) return J(401, { error: 'This account has been closed.' }); const role = l.staff ? who.role : 'owner';
+      const otpEmail = l.staff ? (key.startsWith('email:') ? key.slice(6) : '') : (emailKey(s.email) ? s.email : (key.startsWith('email:') ? key.slice(6) : ''));
+      if (E.RESEND_API_KEY && otpEmail) {
+        const code = genOtp(), chal = 'oc' + crypto.randomBytes(10).toString('hex');
+        await kvSet('otp:' + chal, { slug: s.slug, staff: l.staff || '', code: sha(code), exp: Date.now() + 10 * 60e3, tries: 0 });
+        await sendOtpMail(otpEmail, code); await secLog(s.slug, 'Login code sent' + (l.staff ? ' (' + who.name + ')' : ''), ip);
+        return J(200, { otp: true, challenge: chal, email: otpEmail.replace(/^(.)[^@]*(@.*)$/, '$1***$2') });
+      }
+      if (l.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (l.staff ? ' (' + who.name + ')' : ''), ip);
       return J(200, { token: tok(s, role, l.staff || ''), slug: s.slug, role });
+    }
+    if (M === 'POST' && p === '/api/login/verify') {
+      if (limited(ip, 'lv', 20, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+      const chal = str(b.challenge, 24), rec = chal && await kvGet('otp:' + chal);
+      if (!rec || rec.exp < Date.now()) return J(400, { error: 'That code has expired. Log in again.' });
+      const s = await kvGet('store:' + rec.slug); if (!s || s.deleted) return J(401, { error: 'This account has been closed.' });
+      const who = rec.staff ? (s.staff || []).find(x => x.id === rec.staff) : s; if (!who) return J(400, { error: 'That code is no longer valid. Log in again.' });
+      const good = sha(str(b.code, 6)) === rec.code;
+      if (!good) { rec.tries = (rec.tries | 0) + 1; if (rec.tries >= 5) { await kvSet('otp:' + chal, null); return J(400, { error: 'Too many wrong codes. Log in again.' }); } await kvSet('otp:' + chal, rec); return J(400, { error: 'That code is not right.' }); }
+      await kvSet('otp:' + chal, null); const role = rec.staff ? who.role : 'owner';
+      if (rec.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (rec.staff ? ' (' + who.name + ')' : ''), ip);
+      return J(200, { token: tok(s, role, rec.staff || ''), slug: s.slug, role });
     }
     if (M === 'GET' && p === '/api/host') { const d = await kvGet('domain:' + str((event.queryStringParameters || {}).h, 100).toLowerCase().replace(/^www\./, '')); if (d && d.status === 'active') return J(200, { slug: d.slug }); return J(404, { error: 'Not found' }); }
     if (M === 'GET' && p === '/api/explore') {
