@@ -72,6 +72,7 @@ async function sbUpload(dataUri, kind) {
 // the Supabase CDN URL when configured, otherwise the base64 itself (old inline behaviour), or '' to clear it.
 async function picIn(im, b, errLabel) {
   im = String(im || ''); if (!im) return { img: '' };
+  if (/^https?:\/\//i.test(im)) return { img: im }; // already a stored picture (e.g. an untouched slot being resent) - nothing new to validate or upload
   if (!/^data:image\/(jpeg|png|webp);base64,/.test(im) || im.length > 450000) return { error: errLabel + ' is too large. Try a smaller one.' };
   const bp = badPic(im, b); if (bp) return { error: bp };
   if (!sbOn()) return { img: im };
@@ -113,7 +114,7 @@ async function note(s, type, text) { try { const pr = s.notify || {}; if (pr[typ
 const PRICE = () => ({ pro: +E.PRICE_PRO || 0, expert: +E.PRICE_EXPERT || 0 });
 const saleOn = s => !!(s.sale && s.sale.on && s.sale.pct >= 1);
 const salePx = (s, p) => saleOn(s) ? Math.round(p.price * (100 - s.sale.pct)) / 100 : p.price;
-const pubProd = p => ({ id: p.id, name: p.name, price: p.price, was: p.was || 0, desc: p.desc || '', img: p.img || '', cat: p.cat || '', badge: p.badge || '', on: p.on, stock: p.stock == null ? null : p.stock });
+const pubProd = p => ({ id: p.id, name: p.name, price: p.price, was: p.was || 0, desc: p.desc || '', img: p.img || '', imgs: (p.imgs && p.imgs.length ? p.imgs : (p.img ? [p.img] : [])), colors: p.colors || [], cat: p.cat || '', badge: p.badge || '', on: p.on, stock: p.stock == null ? null : p.stock });
 const LAYP = { hdr: ['center', 'left', 'dark', 'mini'], hero: ['photo', 'split', 'center', 'bold', 'tiles', 'spot'], cats: ['tiles', 'circles', 'pills', 'cards', 'text'], cards: ['plain', 'border', 'tight', 'big', 'over'], promo: ['banner', 'duo', 'strip'], trust: ['icons', 'bar', 'none'], foot: ['simple', 'cols', 'dark'], shape: ['soft', 'sharp', 'round'], font: ['sans', 'serif'] }, LAYS = ['hero', 'trust', 'cats', 'items', 'promo', 'story'], PALS = ['white', 'cream', 'black', 'sage', 'blush', 'sky', 'sand'];
 const cleanLayout = (b, old) => { const o = Object.assign({}, old || {}); if (b && typeof b === 'object') { const n = parseInt(b.n, 10); if (n >= 1 && n <= 120) o.n = n; if (b.parts && typeof b.parts === 'object') { const p = {}; for (const k of Object.keys(LAYP)) if (LAYP[k].includes(b.parts[k])) p[k] = b.parts[k]; o.parts = p; } if (Array.isArray(b.ord)) { const q = []; for (const x of b.ord) if (LAYS.includes(x) && !q.includes(x)) q.push(x); for (const x of LAYS) if (!q.includes(x)) q.push(x); o.ord = q; } if (Array.isArray(b.off)) o.off = b.off.filter(x => LAYS.includes(x)); } return o; };
 const AIMARK = /trainedAlgorithmicMedia|algorithmicMedia|midjourney|dall[-·. ]?e|stable ?diffusion|adobe firefly|made with google ai|openai|novelai|leonardo\.ai|comfyui|sdxl|Sampler: |Negative prompt/i;
@@ -308,10 +309,12 @@ const handler = async (event) => {
         if (!can('products')) return J(403, { error: 'You do not have access to edit products.' });
         s.products = s.products || []; if (b.del) { s.products = s.products.filter(x => x.id !== b.id); await kvSet('store:' + s.slug, s); return J(200, { ok: true }); }
         const price = Math.round((+b.price || 0) * 100) / 100, name = str(b.name, 60); if (!name || !(price > 0)) return J(400, { error: 'Add a name and a price.' });
-        const pi = await picIn(b.img, b, 'That photo'); if (pi.error) return J(400, { error: pi.error }); const img = pi.img;
+        const imgsIn = Array.isArray(b.imgs) ? b.imgs.slice(0, 3) : (b.img !== undefined ? [b.img] : undefined);
+        let imgs; if (imgsIn !== undefined) { imgs = []; for (const one of imgsIn) { if (!one) continue; const pi = await picIn(one, b, 'That photo'); if (pi.error) return J(400, { error: pi.error }); if (pi.img) imgs.push(pi.img); } }
+        const colors = Array.isArray(b.colors) ? [...new Set(b.colors.map(c => str(c, 20)).filter(Boolean))].slice(0, 8) : undefined;
         let pr = b.id && s.products.find(x => x.id === b.id); if (!pr) { if (s.products.length >= 200) return J(400, { error: 'You have reached 200 items.' }); pr = { id: 'p' + crypto.randomBytes(4).toString('hex') }; s.products.push(pr); }
         Object.assign(pr, { name, price, desc: str(b.desc, 140), cat: str(b.cat, 24), badge: ['', 'New', 'Sale', 'Best seller'].includes(b.badge) ? b.badge : '', was: +b.was > price ? Math.round(+b.was * 100) / 100 : 0, cost: Math.max(0, +b.cost || 0), sku: str(b.sku, 20), on: b.on !== false });
-        if (b.stock !== undefined) pr.stock = (b.stock === null || b.stock === '') ? null : Math.max(0, Math.round(+b.stock || 0)); if (b.img !== undefined) pr.img = img; await kvSet('store:' + s.slug, s); return J(200, { ok: true, id: pr.id });
+        if (b.stock !== undefined) pr.stock = (b.stock === null || b.stock === '') ? null : Math.max(0, Math.round(+b.stock || 0)); if (imgs !== undefined) { pr.imgs = imgs; pr.img = imgs[0] || ''; } if (colors !== undefined) pr.colors = colors; await kvSet('store:' + s.slug, s); return J(200, { ok: true, id: pr.id });
       }
       if (M === 'POST' && p === '/api/seller/order') {
         if (!canOrders) return J(403, { error: 'You do not have access to orders.' }); const ord = (await kvGet('orders:' + s.slug)) || { l: [] };
