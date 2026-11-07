@@ -92,7 +92,7 @@ const ekey = () => crypto.createHash('sha256').update('k:' + SECRET()).digest();
 const enc = t => { const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', ekey(), iv), d = Buffer.concat([c.update(String(t), 'utf8'), c.final()]); return b64(Buffer.concat([iv, c.getAuthTag(), d])); };
 const dec = t => { try { const r = Buffer.from(String(t), 'base64url'), d = crypto.createDecipheriv('aes-256-gcm', ekey(), r.subarray(0, 12)); d.setAuthTag(r.subarray(12, 28)); return Buffer.concat([d.update(r.subarray(28)), d.final()]).toString('utf8'); } catch (e) { return ''; } };
 async function ps(key, path, body) { const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 9000); try { const r = await fetch('https://api.paystack.co' + path, { method: body ? 'POST' : 'GET', signal: ac.signal, headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); return { status: r.status, j: await r.json().catch(() => ({})) }; } finally { clearTimeout(tm); } }
-const payMethods = s => { const p = s.pay || {}, m = []; if (p.paystack) m.push('paystack'); if (p.momo && p.momo.number) m.push('momo'); if (p.link) m.push('link'); if (p.cod !== false) m.push('cod'); return m; };
+const payMethods = s => { const p = s.pay || {}, m = []; if (p.paystack || p.subaccount) m.push('paystack'); if (p.momo && p.momo.number) m.push('momo'); if (p.link) m.push('link'); if (p.cod !== false) m.push('cod'); return m; };
 const pinHash = (pin, salt) => crypto.scryptSync(String(pin), salt, 32).toString('hex');
 const RESERVED = ['app', 'api', 's', 'admin', 'login', 'signup', 'sample', 'www', 'help', 'about', 'explore', 'themes', 'security'];
 const TYPES = { food: 'Food & drinks', thrift: 'Thrift & fashion', shoes: 'Shoes & sneakers', phones: 'Phones & gadgets', beauty: 'Beauty & care', home: 'Home & living', shipping: 'Shipping & delivery', other: 'Something else' };
@@ -253,9 +253,10 @@ const handler = async (event) => {
       out.sort((m1, m2) => (m2.verified - m1.verified) || m1.name.localeCompare(m2.name)); return J(200, { types: TYPES, counts, shops: out.slice(0, 60) });
     }
     if (M === 'GET' && p === '/api/pay/verify') {
-      if (limited(ip, 'pv', 30, 600e3)) return J(429, { error: 'Slow down a little.' }); const q = event.queryStringParameters || {}, st = await kvGet('store:' + str(q.slug, 40)); if (!st || !st.pay || !st.pay.paystack) return J(404, { error: 'Not found' });
+      if (limited(ip, 'pv', 30, 600e3)) return J(429, { error: 'Slow down a little.' }); const q = event.queryStringParameters || {}, st = await kvGet('store:' + str(q.slug, 40)); if (!st || !st.pay || (!st.pay.paystack && !st.pay.subaccount)) return J(404, { error: 'Not found' });
       const ord = (await kvGet('orders:' + st.slug)) || { l: [] }, o = ord.l.find(x => x.no === str(q.no, 12)); if (!o) return J(404, { error: 'Order not found' }); if (o.paid) return J(200, { paid: true });
-      try { const r = await ps(dec(st.pay.paystack.k), '/transaction/verify/' + encodeURIComponent(st.slug + '-' + o.no)); if (r.j && r.j.data && r.j.data.status === 'success' && r.j.data.amount >= Math.round(o.total * 100)) { o.paid = true; o.paidAt = new Date().toISOString(); o.paidBy = 'Paystack'; o.log = (o.log || []).concat([{ at: o.paidAt, by: 'Paystack', what: 'Payment confirmed online' }]); await kvSet('orders:' + st.slug, ord); await note(st, 'payment', 'Online payment received for ' + o.no + ' · GH₵ ' + o.total); return J(200, { paid: true }); } } catch (e) {} return J(200, { paid: false });
+      const vKey = (st.pay.subaccount && E.PAYSTACK_PLATFORM_KEY) ? E.PAYSTACK_PLATFORM_KEY : (st.pay.paystack ? dec(st.pay.paystack.k) : null); if (!vKey) return J(200, { paid: false });
+      try { const r = await ps(vKey, '/transaction/verify/' + encodeURIComponent(st.slug + '-' + o.no)); if (r.j && r.j.data && r.j.data.status === 'success' && r.j.data.amount >= Math.round(o.total * 100)) { o.paid = true; o.paidAt = new Date().toISOString(); o.paidBy = 'Paystack'; o.log = (o.log || []).concat([{ at: o.paidAt, by: 'Paystack', what: 'Payment confirmed online' }]); await kvSet('orders:' + st.slug, ord); await note(st, 'payment', 'Online payment received for ' + o.no + ' · GH₵ ' + o.total); return J(200, { paid: true }); } } catch (e) {} return J(200, { paid: false });
     }
     // Paystack calls this on its own, server to server, whenever a payment completes - it is never
     // triggered by a shopper's browser. We only trust it once the x-paystack-signature header checks
@@ -269,6 +270,23 @@ const handler = async (event) => {
       const sig = String(h['x-paystack-signature'] || ''), key = dec(st.pay.paystack.k), expected = crypto.createHmac('sha512', key).update(raw).digest('hex');
       if (!sig || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) { if (limited(ip, 'wh', 40, 600e3)) return J(429, { error: 'Slow down' }); return J(401, { error: 'Bad signature' }); }
       if (b && b.event === 'charge.success' && b.data) { const ref = String(b.data.reference || ''), no = ref.startsWith(slug + '-') ? ref.slice(slug.length + 1) : ''; const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no); if (o && !o.paid && b.data.status === 'success' && (b.data.amount || 0) >= Math.round(o.total * 100)) { o.paid = true; o.paidAt = new Date().toISOString(); o.paidBy = 'Paystack'; o.log = (o.log || []).concat([{ at: o.paidAt, by: 'Paystack', what: 'Payment confirmed online (webhook)' }]); await kvSet('orders:' + slug, ord); await note(st, 'payment', 'Online payment received for ' + no + ' · GH₵ ' + o.total); } }
+      return J(200, { ok: true });
+    }
+    // Single platform-level webhook for every shop paying through a Strand-created Paystack subaccount.
+    // Paystack signs this with STRAND'S OWN secret key (it's configured once, on Strand's Paystack
+    // dashboard, not per shop) - so one URL now covers every subaccount shop, which a per-shop secret
+    // key could never do. A shop on the old direct-key flow keeps using its own /api/webhook/paystack/<slug>
+    // URL above; this route only ever looks at orders belonging to shops that have a subaccount on file.
+    if (M === 'POST' && p === '/api/webhook/paystack') {
+      if (!E.PAYSTACK_PLATFORM_KEY) return J(404, { error: 'Not found' });
+      const sig = String(h['x-paystack-signature'] || ''), expected = crypto.createHmac('sha512', E.PAYSTACK_PLATFORM_KEY).update(raw).digest('hex');
+      if (!sig || sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) { if (limited(ip, 'wh', 40, 600e3)) return J(429, { error: 'Slow down' }); return J(401, { error: 'Bad signature' }); }
+      if (b && b.event === 'charge.success' && b.data) {
+        const ref = String(b.data.reference || ''), m = ref.match(/^(.+)-([^-]+)$/);
+        if (m) { const slug = m[1], no = m[2], st = await kvGet('store:' + slug);
+          if (st && st.pay && st.pay.subaccount) { const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no); if (o && !o.paid && b.data.status === 'success' && (b.data.amount || 0) >= Math.round(o.total * 100)) { o.paid = true; o.paidAt = new Date().toISOString(); o.paidBy = 'Paystack'; o.log = (o.log || []).concat([{ at: o.paidAt, by: 'Paystack', what: 'Payment confirmed online (webhook)' }]); await kvSet('orders:' + slug, ord); await note(st, 'payment', 'Online payment received for ' + no + ' · GH₵ ' + o.total); } }
+        }
+      }
       return J(200, { ok: true });
     }
     if (M === 'POST' && p === '/api/order') {
@@ -295,7 +313,7 @@ const handler = async (event) => {
       const msg = 'New order ' + no + '\n' + items.map(i => i.qty + ' x ' + i.name + ' (GH₵ ' + i.price * i.qty + ')').join('\n') + '\nTotal: GH₵ ' + total + '\nName: ' + o.name + '\nPhone: ' + o.phone + (o.address ? '\nAddress: ' + o.address : '') + (o.note ? '\nNote: ' + o.note : '');
       const out = { ok: true, no, total, pay: method, ships: o.ships, eta: o.eta }; if (s.wa !== false && s.phone) out.wa ='https://wa.me/' + s.phone + '?text=' + encodeURIComponent(msg + '\nPayment: ' + ({ paystack: 'online (card or mobile money)', momo: 'mobile money', link: 'payment link', cod: 'pay on delivery' })[method]); else if (s.phone) out.call = s.phone; out.contact = o.phone;
       if (method === 'momo') out.momo = s.pay.momo; if (method === 'link') out.link = s.pay.link;
-      if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'), r = await ps(dec(s.pay.paystack.k), '/transaction/initialize', { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Send the order on WhatsApp and pay the shop directly.'; }
+      if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'); const viaSub = s.pay.subaccount && E.PAYSTACK_PLATFORM_KEY; const initBody = { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }; if (viaSub) initBody.subaccount = s.pay.subaccount.code; const r = await ps(viaSub ? E.PAYSTACK_PLATFORM_KEY : dec(s.pay.paystack.k), '/transaction/initialize', initBody); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Send the order on WhatsApp and pay the shop directly.'; }
       return J(200, out);
     }
     if (M === 'GET' && p === '/api/admin/health') {
@@ -341,13 +359,30 @@ const handler = async (event) => {
         { const changed = Object.keys(b).filter(k => k !== 'hp'); if (changed.length) await secLog(s.slug, 'Shop settings changed: ' + changed.join(', ') + (s._me ? ' (' + s._me.name + ')' : ''), ip); }
         return J(200, { ok: true });
       }
+      if (M === 'GET' && p === '/api/seller/banks') {
+        if (!E.PAYSTACK_PLATFORM_KEY) return J(200, { banks: [] });
+        try { const r = await ps(E.PAYSTACK_PLATFORM_KEY, '/bank?currency=GHS&country=ghana'); const list = (r.j && r.j.data || []).map(x => ({ name: x.name, code: x.code, momo: x.type === 'mobile_money' })); return J(200, { banks: list }); } catch (e) { return J(200, { banks: [] }); }
+      }
       if (M === 'POST' && p === '/api/seller/pay') {
         if (!can('pay_settings')) return J(403, { error: 'You do not have access to payment settings.' }); const pay = s.pay || {};
         if (b.cod !== undefined) pay.cod = !!b.cod;
         if (b.momo !== undefined) { const n = String(b.momo && b.momo.number || '').replace(/\D/g, ''); pay.momo = n ? { net: str(b.momo.net, 14), number: n.slice(0, 15), name: str(b.momo.name, 40) } : null; }
         if (b.link !== undefined) { const u = String(b.link || '').trim(); if (u && !/^https:\/\/[^\s]{4,300}$/.test(u)) return J(400, { error: 'The payment link must start with https://' }); pay.link = u; }
         if (b.paystackKey !== undefined) { const k = String(b.paystackKey || '').trim(); if (!k) pay.paystack = null; else { if (!/^sk_(live|test)_[A-Za-z0-9]{10,80}$/.test(k)) return J(400, { error: 'That does not look like a Paystack secret key. It starts with sk_live_ or sk_test_.' }); try { const r = await ps(k, '/balance'); if (r.status === 401 || r.status === 403) return J(400, { error: 'Paystack did not accept that key. Copy it again from your Paystack settings.' }); } catch (e) {} pay.paystack = { k: enc(k), last4: k.slice(-4), mode: k.startsWith('sk_live') ? 'live' : 'test' }; } }
-        if (pay.cod === false && !pay.paystack && !(pay.momo && pay.momo.number) && !pay.link) return J(400, { error: 'Keep at least one way to get paid.' });
+        if (b.subaccount !== undefined) {
+          if (!E.PAYSTACK_PLATFORM_KEY) return J(503, { error: "Strand's own Paystack connection isn't turned on yet — ask us and we'll enable it." });
+          const sa = b.subaccount || {};
+          if (sa === null) { pay.subaccount = null; }
+          else {
+            const businessName = str(sa.businessName, 80) || s.name, bankCode = str(sa.bankCode, 12), acct = String(sa.accountNumber || '').replace(/\D/g, '').slice(0, 20);
+            if (!bankCode || acct.length < 6) return J(400, { error: 'Pick your bank or mobile money provider and enter a valid account number.' });
+            let r; try { r = await ps(E.PAYSTACK_PLATFORM_KEY, '/subaccount', { business_name: businessName, settlement_bank: bankCode, account_number: acct, percentage_charge: 0 }); } catch (e) { return J(502, { error: "Couldn't reach Paystack. Try again in a moment." }); }
+            if (!r.j || !r.j.status || !r.j.data || !r.j.data.subaccount_code) return J(400, { error: (r.j && r.j.message) || "Paystack couldn't verify those account details. Check them and try again." });
+            pay.subaccount = { code: r.j.data.subaccount_code, bankCode, last4: acct.slice(-4), businessName, createdAt: new Date().toISOString() };
+            await secLog(s.slug, 'Connected payouts through Strand (subaccount)', ip);
+          }
+        }
+        if (pay.cod === false && !pay.paystack && !pay.subaccount && !(pay.momo && pay.momo.number) && !pay.link) return J(400, { error: 'Keep at least one way to get paid.' });
         if (b.payOutRequest) { const rq = (await kvGet('reqs')) || { l: [] }; rq.l.unshift({ id: 'r' + Date.now().toString(36), slug: s.slug, shop: s.name, phone: s.phone || '', email: s.email || '', kind: 'payout', text: 'Wants Strand to collect customer payments on their behalf (no Paystack account of their own yet).', at: new Date().toISOString(), done: false }); await kvSet('reqs', rq); s.payOutRequested = true; }
         s.pay = pay; await kvSet('store:' + s.slug, s); return J(200, { ok: true });
       }
