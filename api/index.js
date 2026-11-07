@@ -105,6 +105,7 @@ const maskIp = ip => String(ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.x.x').repl
 async function secLog(slug, what, ip) { try { const x = (await kvGet('sec:' + slug)) || { l: [] }; x.l.unshift({ at: new Date().toISOString(), what, ip: maskIp(ip) }); x.l = x.l.slice(0, 30); await kvSet('sec:' + slug, x); } catch (e) {} }
 const genOtp = () => String(crypto.randomInt(0, 1e6)).padStart(6, '0');
 async function sendOtpMail(email, code) { try { if (!E.RESEND_API_KEY) return false; await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [email], subject: 'Your Strand login code: ' + code, text: 'Your one-time code to log in to Strand is:\n\n' + code + '\n\nIt expires in 10 minutes. If this was not you, ignore this email and your account stays safe.' }) }); return true; } catch (e) { return false; } }
+async function sendResetMail(email, code) { try { if (!E.RESEND_API_KEY) return false; await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [email], subject: 'Reset your Strand password: ' + code, text: 'Use this code to reset your Strand account password:\n\n' + code + '\n\nIt expires in 10 minutes. If you did not ask for this, ignore this email - your password will not change.' }) }); return true; } catch (e) { return false; } }
 const FAKE_SALT = 'f'.repeat(24);
 const ROLES = { owner: 'Owner', admin: 'Admin', manager: 'Store manager', sales: 'Sales manager', cashier: 'Cashier', assistant: 'Assistant', inventory: 'Stock keeper', developer: 'Developer' };
 const PERM_ALL = ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'pay_settings', 'analytics', 'team', 'settings', 'design', 'apps', 'domain', 'policies', 'notify', 'security', 'billing'];
@@ -399,6 +400,32 @@ const handler = async (event) => {
         const good = sha(str(b.code, 6)) === rec.code;
         if (!good) { rec.tries = (rec.tries | 0) + 1; if (rec.tries >= 5) { await kvSet('cuotp:' + chal, null); return J(400, { error: 'Too many wrong codes. Log in again.' }); } await kvSet('cuotp:' + chal, rec); return J(400, { error: 'That code is not right.' }); }
         await kvSet('cuotp:' + chal, null); await secLog('customer:' + c.id, 'Logged in', ip); return J(200, { token: custTok(c), name: c.name });
+      }
+      if (M === 'POST' && p === '/api/customer/password/forgot') {
+        if (limited(ip, 'cf', 8, 3600e3)) return J(429, { error: 'Too many tries. Wait a little and try again.' });
+        const key = custAcctKey(b.id || b.phone), idx = key && await kvGet(key), c = idx && await kvGet('cust:' + idx.id);
+        const chal = 'cp' + crypto.randomBytes(10).toString('hex');
+        if (c && !c.deleted && emailKey(c.email) && E.RESEND_API_KEY) {
+          const code = genOtp();
+          await kvSet('cupr:' + chal, { id: c.id, code: sha(code), exp: Date.now() + 10 * 60e3, tries: 0 });
+          await sendResetMail(c.email, code);
+          await secLog('customer:' + c.id, 'Password reset requested', ip);
+        }
+        // same response whether or not we found an account, so a wrong phone/email can't be used to probe who has one
+        return J(200, { challenge: chal });
+      }
+      if (M === 'POST' && p === '/api/customer/password/reset') {
+        if (limited(ip, 'cpr', 20, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
+        const chal = str(b.challenge, 24), rec = chal && await kvGet('cupr:' + chal);
+        if (!rec || rec.exp < Date.now()) return J(400, { error: 'That code has expired. Start again.' });
+        const good = sha(str(b.code, 6)) === rec.code;
+        if (!good) { rec.tries = (rec.tries | 0) + 1; if (rec.tries >= 5) { await kvSet('cupr:' + chal, null); return J(400, { error: 'Too many wrong codes. Start again.' }); } await kvSet('cupr:' + chal, rec); return J(400, { error: 'That code is not right.' }); }
+        const c = await kvGet('cust:' + rec.id); if (!c || c.deleted) return J(401, { error: 'This account has been closed.' });
+        const pe = passOk(b.pin); if (pe) return J(400, { error: pe });
+        c.salt = crypto.randomBytes(16).toString('hex'); c.pin = pinHash(String(b.pin), c.salt); c.sv = (c.sv | 0) + 1;
+        await kvSet('cust:' + c.id, c); await kvSet('cupr:' + chal, null);
+        await secLog('customer:' + c.id, 'Password reset', ip);
+        return J(200, { token: custTok(c), name: c.name });
       }
       const cu = await custAuth(h);
       if (!cu) return J(401, { error: 'Please log in again.' });
