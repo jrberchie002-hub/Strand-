@@ -51,6 +51,27 @@ const kvSet = async (k, v) => {
   if (clean === null || clean === undefined) { await fs('DELETE', k).catch(() => {}); return; }
   await fs('PATCH', k, { fields: { value: toFs(clean) } });
 };
+/* ---------- images: Supabase Storage if configured, else kept as base64 inline ---------- */
+const sbOn = () => E.SUPABASE_URL && E.SUPABASE_SERVICE_KEY;
+const MIME_EXT = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+async function sbUpload(dataUri, kind) {
+  const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(dataUri); if (!m) return dataUri;
+  const mime = m[1], buf = Buffer.from(m[2], 'base64'), ext = MIME_EXT[mime];
+  const path = 'u/' + String(kind || 'img') + '-' + crypto.createHash('sha256').update(buf).digest('hex').slice(0, 24) + '.' + ext;
+  const url = String(E.SUPABASE_URL).replace(/\/$/, '') + '/storage/v1/object/strand-images/' + path;
+  const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + E.SUPABASE_SERVICE_KEY, 'Content-Type': 'image/' + mime, 'x-upsert': 'true' }, body: buf });
+  if (!r.ok && r.status !== 409) { const t = await r.text().catch(() => ''); throw new Error('image upload ' + r.status + ' ' + t.slice(0, 160)); }
+  return String(E.SUPABASE_URL).replace(/\/$/, '') + '/storage/v1/object/public/strand-images/' + path;
+}
+// validates+checks a freshly submitted picture (base64 data URI), then returns what should be stored:
+// the Supabase CDN URL when configured, otherwise the base64 itself (old inline behaviour), or '' to clear it.
+async function picIn(im, b, errLabel) {
+  im = String(im || ''); if (!im) return { img: '' };
+  if (!/^data:image\/(jpeg|png|webp);base64,/.test(im) || im.length > 450000) return { error: errLabel + ' is too large. Try a smaller one.' };
+  const bp = badPic(im, b); if (bp) return { error: bp };
+  if (!sbOn()) return { img: im };
+  try { return { img: await sbUpload(im, 'p') }; } catch (e) { return { error: 'Could not save that picture. Try again.' }; }
+}
 /* ---------- helpers ---------- */
 const J = (s, o) => ({ statusCode: s, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, body: JSON.stringify(o) });
 const sha = x => crypto.createHash('sha256').update(String(x)).digest('hex');
@@ -249,7 +270,7 @@ const handler = async (event) => {
         if (b.name !== undefined && str(b.name, 40).length >= 2) s.name = str(b.name, 40);
         if (THEMES.includes(b.theme) && b.theme !== s.theme) { if (THEME_EXPERT.has(b.theme) && planOf(s) !== 'expert') return J(402, { error: 'That look is part of the Expert plan.', upgrade: true }); s.theme = b.theme; if (THEME_LAYOUT[b.theme]) s.layout = cleanLayout({ n: THEME_LAYOUT[b.theme] }, s.layout); }
         if (/^#[0-9a-f]{6}$/i.test(b.accent || '')) s.accent = b.accent; if (b.announce !== undefined) s.announce = str(b.announce, 90);
-        for (const k of ['hero', 'banner']) if (b[k] && typeof b[k] === 'object') { const o = s[k] || {}; if (b[k].title !== undefined) o.title = str(b[k].title, 80); if (b[k].sub !== undefined) o.sub = str(b[k].sub, 140); if (b[k].cta !== undefined) o.cta = str(b[k].cta, 24); if (b[k].img !== undefined) { const im = String(b[k].img || ''); if (im && (!/^data:image\/(jpeg|png|webp);base64,/.test(im) || im.length > 450000)) return J(400, { error: 'That picture is too large. Try a smaller one.' }); { const bp = badPic(im, b); if (bp) return J(400, { error: bp }); } o.img = im; } s[k] = o; }
+        for (const k of ['hero', 'banner']) if (b[k] && typeof b[k] === 'object') { const o = s[k] || {}; if (b[k].title !== undefined) o.title = str(b[k].title, 80); if (b[k].sub !== undefined) o.sub = str(b[k].sub, 140); if (b[k].cta !== undefined) o.cta = str(b[k].cta, 24); if (b[k].img !== undefined) { const pi = await picIn(b[k].img, b, 'That picture'); if (pi.error) return J(400, { error: pi.error }); o.img = pi.img; } s[k] = o; }
         if (b.social && typeof b.social === 'object') s.social = { instagram: str(b.social.instagram, 40).replace(/^@/, ''), tiktok: str(b.social.tiktok, 40).replace(/^@/, ''), whatsapp: s.phone };
         await kvSet('store:' + s.slug, s); return J(200, { ok: true });
       }
@@ -271,8 +292,7 @@ const handler = async (event) => {
         if (!can('products')) return J(403, { error: 'You do not have access to edit products.' });
         s.products = s.products || []; if (b.del) { s.products = s.products.filter(x => x.id !== b.id); await kvSet('store:' + s.slug, s); return J(200, { ok: true }); }
         const price = Math.round((+b.price || 0) * 100) / 100, name = str(b.name, 60); if (!name || !(price > 0)) return J(400, { error: 'Add a name and a price.' });
-        let img = String(b.img || ''); if (img && (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || img.length > 450000)) return J(400, { error: 'That photo is too large. Try a smaller one.' });
-        { const bp = badPic(img, b); if (bp) return J(400, { error: bp }); }
+        const pi = await picIn(b.img, b, 'That photo'); if (pi.error) return J(400, { error: pi.error }); const img = pi.img;
         let pr = b.id && s.products.find(x => x.id === b.id); if (!pr) { if (s.products.length >= 200) return J(400, { error: 'You have reached 200 items.' }); pr = { id: 'p' + crypto.randomBytes(4).toString('hex') }; s.products.push(pr); }
         Object.assign(pr, { name, price, desc: str(b.desc, 140), cat: str(b.cat, 24), badge: ['', 'New', 'Sale', 'Best seller'].includes(b.badge) ? b.badge : '', was: +b.was > price ? Math.round(+b.was * 100) / 100 : 0, cost: Math.max(0, +b.cost || 0), sku: str(b.sku, 20), on: b.on !== false });
         if (b.stock !== undefined) pr.stock = (b.stock === null || b.stock === '') ? null : Math.max(0, Math.round(+b.stock || 0)); if (b.img !== undefined) pr.img = img; await kvSet('store:' + s.slug, s); return J(200, { ok: true, id: pr.id });
