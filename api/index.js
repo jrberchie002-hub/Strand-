@@ -5,17 +5,22 @@ const E = process.env;
 const SECRET = () => String(E.STORES_SECRET || 'dev-only-secret-change-me-please-0123456789');
 /* ---------- storage: Firebase Firestore if configured, else memory ---------- */
 const mem = new Map();
-const fbOn = () => E.FIREBASE_PROJECT_ID && E.FIREBASE_CLIENT_EMAIL && E.FIREBASE_PRIVATE_KEY;
+// strips accidental wrapping quotes and leading/trailing whitespace/newlines that commonly sneak in when
+// pasting a credential into a dashboard's env var field - the single most common cause of a "valid-looking"
+// Firebase key failing to auth.
+const cleanEnv = v => String(v || '').trim().replace(/^['"]|['"]$/g, '').trim();
+const fbProjectId = () => cleanEnv(E.FIREBASE_PROJECT_ID), fbClientEmail = () => cleanEnv(E.FIREBASE_CLIENT_EMAIL), fbPrivateKey = () => cleanEnv(E.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n');
+const fbOn = () => fbProjectId() && fbClientEmail() && fbPrivateKey();
 const b64u = s => Buffer.from(s).toString('base64url');
 let _fbTok = '', _fbTokExp = 0;
 async function fbToken() {   // trades the service account key for a short-lived access token; cached until near expiry
   if (_fbTok && Date.now() < _fbTokExp) return _fbTok;
   const now = Math.floor(Date.now() / 1000);
-  const unsigned = b64u(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' + b64u(JSON.stringify({ iss: E.FIREBASE_CLIENT_EMAIL, scope: 'https://www.googleapis.com/auth/datastore', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 }));
-  const key = String(E.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n');
-  const jwt = unsigned + '.' + crypto.createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url');
+  const unsigned = b64u(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' + b64u(JSON.stringify({ iss: fbClientEmail(), scope: 'https://www.googleapis.com/auth/datastore', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 }));
+  const key = fbPrivateKey();
+  let jwt; try { jwt = unsigned + '.' + crypto.createSign('RSA-SHA256').update(unsigned).sign(key, 'base64url'); } catch (e) { throw new Error('firebase key invalid: ' + e.message); }
   const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + jwt });
-  const j = await r.json().catch(() => ({})); if (!r.ok || !j.access_token) throw new Error('firebase auth ' + r.status);
+  const j = await r.json().catch(() => ({})); if (!r.ok || !j.access_token) throw new Error('firebase auth ' + r.status + ' ' + (j.error_description || j.error || ''));
   _fbTok = j.access_token; _fbTokExp = Date.now() + (j.expires_in || 3600) * 1000 - 60000; return _fbTok;
 }
 function toFs(v) {   // JS value -> Firestore's typed "Value" wire format
@@ -39,7 +44,7 @@ function fromFs(v) {   // and back
 }
 async function fs(method, docId, body) {
   const tok = await fbToken();
-  const url = 'https://firestore.googleapis.com/v1/projects/' + E.FIREBASE_PROJECT_ID + '/databases/(default)/documents/strand_kv/' + encodeURIComponent(docId) + (method === 'PATCH' ? '?updateMask.fieldPaths=value' : '');
+  const url = 'https://firestore.googleapis.com/v1/projects/' + fbProjectId() + '/databases/(default)/documents/strand_kv/' + encodeURIComponent(docId) + (method === 'PATCH' ? '?updateMask.fieldPaths=value' : '');
   const r = await fetch(url, { method, headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (r.status === 404) return null;
   const t = await r.text(); if (!r.ok) throw new Error('db ' + r.status + ' ' + t.slice(0, 200)); return t ? JSON.parse(t) : null;
@@ -154,7 +159,7 @@ const STN = require('../station')({
     const x = (await kvGet('idx')) || { l: [] }, day = new Date().toISOString().slice(0, 10), c = await ctlGet(); let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0; const plans = { base: 0, pro: 0, expert: 0 };
     for (const sl of x.l) { const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)]++; if (s.verified) verified++; if (s.open === false) closed++; if (s.domain && s.domain.status === 'pending') dom++; if (String(s.createdAt || '').slice(0, 10) === day) newToday++; }
     const rq = (await kvGet('reqs')) || { l: [] };
-    return { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: sbOn() ? 'supabase' : 'memory', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
+    return { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: fbOn() ? 'firestore' : 'memory', images: sbOn() ? 'supabase' : 'inline', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
   },
   command: async (c, a, by) => {
     const cur = await ctlGet(), t = (x, n) => String(x == null ? '' : x).slice(0, n);
@@ -181,7 +186,7 @@ const handler = async (event) => {
   { const sr = await STN.handle(M, p, h, raw); if (sr) return J(sr.status, sr.body); }
   let b = {}; try { b = raw ? JSON.parse(raw) : {}; } catch (e) { return J(400, { error: 'That did not look right. Try again.' }); }
   try {
-    await seed();
+    try { await seed(); } catch (e) { console.error('[strand] seed() failed (continuing without sample shops):', e && e.stack || e); }
     let m;
     if (M === 'GET' && (m = p.match(/^\/api\/store\/([a-z0-9-]{1,30})$/))) { const s = await kvGet('store:' + m[1]); if (!s) return J(404, { error: "We couldn't find that shop. Check the link and try again." }); { const cc = await ctlGet(); return J(200, { store: pubStore(s), notice: cc.banner || '', maint: !!cc.maint }); } }
     if (M === 'POST' && p === '/api/signup') {
@@ -244,6 +249,15 @@ const handler = async (event) => {
       const out = { ok: true, no, total, pay: method }; if (s.wa !== false && s.phone) out.wa = 'https://wa.me/' + s.phone + '?text=' + encodeURIComponent(msg + '\nPayment: ' + ({ paystack: 'online (card or mobile money)', momo: 'mobile money', link: 'payment link', cod: 'pay on delivery' })[method]); else if (s.phone) out.call = s.phone; out.contact = o.phone;
       if (method === 'momo') out.momo = s.pay.momo; if (method === 'link') out.link = s.pay.link;
       if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'), r = await ps(dec(s.pay.paystack.k), '/transaction/initialize', { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Send the order on WhatsApp and pay the shop directly.'; }
+      return J(200, out);
+    }
+    if (M === 'GET' && p === '/api/admin/health') {
+      // deliberately checks the key as either a header or a ?key= query param, so it can be opened directly
+      // in a browser address bar for a quick diagnostic - everything it reveals is non-secret (booleans/status only).
+      const given = String(h['x-admin'] || (event.queryStringParameters || {}).key || '');
+      if (!E.STORES_ADMIN || String(E.STORES_ADMIN).length < 16 || given.length < 16 || !crypto.timingSafeEqual(Buffer.from(sha(given)), Buffer.from(sha(E.STORES_ADMIN)))) { if (limited(ip, 'ad', 8, 600e3)) return J(429, { error: 'Too many tries.' }); return J(404, { error: 'Not found' }); }
+      const out = { env: { FIREBASE_PROJECT_ID: !!E.FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL: !!E.FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY: !!E.FIREBASE_PRIVATE_KEY, SUPABASE_URL: !!E.SUPABASE_URL, SUPABASE_SERVICE_KEY: !!E.SUPABASE_SERVICE_KEY, STORES_SECRET_ok: String(E.STORES_SECRET || '').length >= 32, STORES_ADMIN_ok: String(E.STORES_ADMIN || '').length >= 16 } };
+      if (fbOn()) { try { const testKey = 'healthcheck:' + Date.now(); await kvSet(testKey, { at: new Date().toISOString() }); const back = await kvGet(testKey); await kvSet(testKey, null); out.firestore = back ? 'ok - read/write round-trip succeeded' : 'wrote but could not read back'; } catch (e) { out.firestore = 'FAILED: ' + e.message; } } else out.firestore = 'not configured (missing one of the three FIREBASE_* vars) - running on in-memory storage';
       return J(200, out);
     }
     if (p.startsWith('/api/admin')) {
