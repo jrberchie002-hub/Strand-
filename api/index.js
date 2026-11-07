@@ -396,7 +396,7 @@ const handler = async (event) => {
       }
     }
     return J(404, { error: 'Not found' });
-  } catch (e) { return J(500, { error: 'Something went wrong on our side. Please try again.' }); }
+  } catch (e) { console.error('[strand] ' + M + ' ' + p + ' failed:', e && e.stack || e); return J(500, { error: 'Something went wrong on our side. Please try again.' }); }
 };
 
 module.exports = async (req, res) => {
