@@ -155,7 +155,7 @@ async function seed() {
   for (const th of Object.keys(SAMPLES)) await addIdx(th === 'classic' ? 'sample' : 'sample-' + th);
   await kvSet('seeded:v4', { n });
 }
-async function auth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'seller') return null; const s = await kvGet('store:' + t.slug); if (!s || (t.sv | 0) !== (s.sv | 0)) return null; const role = t.role || 'owner'; if (role !== 'owner') { const m = (s.staff || []).find(x => x.id === t.sid); if (!m || m.off || (t.uv | 0) !== (m.uv | 0)) return null; s._me = m; } s._role = role; s._sid = t.sid || ''; if (role === 'owner') s._me = null; return s; }
+async function auth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'seller') return null; const s = await kvGet('store:' + t.slug); if (!s || s.deleted || (t.sv | 0) !== (s.sv | 0)) return null; const role = t.role || 'owner'; if (role !== 'owner') { const m = (s.staff || []).find(x => x.id === t.sid); if (!m || m.off || (t.uv | 0) !== (m.uv | 0)) return null; s._me = m; } s._role = role; s._sid = t.sid || ''; if (role === 'owner') s._me = null; return s; }
 const tok = (s, role, sid) => sign({ r: 'seller', slug: s.slug, role, sid: sid || '', sv: s.sv | 0, uv: sid ? (((s.staff || []).find(x => x.id === sid) || {}).uv | 0) : 0, exp: Date.now() + (role === 'owner' ? 14 : 7) * 864e5 });
 const isAdmin = h => E.STORES_ADMIN && String(E.STORES_ADMIN).length >= 16 && String(h['x-admin'] || '').length >= 16 && crypto.timingSafeEqual(Buffer.from(sha(h['x-admin'])), Buffer.from(sha(E.STORES_ADMIN)));
 /* ---------- handler ---------- */
@@ -221,7 +221,7 @@ const handler = async (event) => {
       const l = key && await kvGet(key), s = l && await kvGet('store:' + l.slug), who = s && (l.staff ? (s.staff || []).find(x => x.id === l.staff) : s);
       const salt = who ? who.salt : FAKE_SALT, calc = pinHash(String(b.pin || '').slice(0, 64), salt), good = who && calc.length === who.pin.length && crypto.timingSafeEqual(Buffer.from(calc), Buffer.from(who.pin));
       if (!good) { if (key) { f.n++; if (f.n >= 5) f.until = Date.now() + Math.min(864e5, 15 * 60e3 * Math.pow(2, f.n - 5)); await kvSet(lk, f); } if (s) await secLog(s.slug, f.until > Date.now() ? 'Account locked after wrong passwords' : 'Wrong password', ip); return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); }
-      if (f.n) await kvSet(lk, null); if (who && who.off) return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); const role = l.staff ? who.role : 'owner'; if (l.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (l.staff ? ' (' + who.name + ')' : ''), ip);
+      if (f.n) await kvSet(lk, null); if (who && who.off) return J(401, { error: "We couldn't find a shop with those details. Check them and try again." }); if (s && s.deleted) return J(401, { error: 'This account has been closed.' }); const role = l.staff ? who.role : 'owner'; if (l.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (l.staff ? ' (' + who.name + ')' : ''), ip);
       return J(200, { token: tok(s, role, l.staff || ''), slug: s.slug, role });
     }
     if (M === 'GET' && p === '/api/host') { const d = await kvGet('domain:' + str((event.queryStringParameters || {}).h, 100).toLowerCase().replace(/^www\./, '')); if (d && d.status === 'active') return J(200, { slug: d.slug }); return J(404, { error: 'Not found' }); }
@@ -315,7 +315,9 @@ const handler = async (event) => {
         if (b.announce !== undefined) s.announce = str(b.announce, 90); if (b.cartWord === 'cart' || b.cartWord === 'bag') s.cartWord = b.cartWord;
         for (const k of ['hero', 'banner']) if (b[k] && typeof b[k] === 'object') { const o = s[k] || {}; if (b[k].title !== undefined) o.title = str(b[k].title, 80); if (b[k].sub !== undefined) o.sub = str(b[k].sub, 140); if (b[k].cta !== undefined) o.cta = str(b[k].cta, 24); if (b[k].img !== undefined) { const pi = await picIn(b[k].img, b, 'That picture'); if (pi.error) return J(400, { error: pi.error }); o.img = pi.img; } s[k] = o; }
         if (b.social && typeof b.social === 'object') s.social = { instagram: str(b.social.instagram, 40).replace(/^@/, ''), tiktok: str(b.social.tiktok, 40).replace(/^@/, ''), whatsapp: s.phone };
-        await kvSet('store:' + s.slug, s); return J(200, { ok: true });
+        await kvSet('store:' + s.slug, s);
+        { const changed = Object.keys(b).filter(k => k !== 'hp'); if (changed.length) await secLog(s.slug, 'Shop settings changed: ' + changed.join(', ') + (s._me ? ' (' + s._me.name + ')' : ''), ip); }
+        return J(200, { ok: true });
       }
       if (M === 'POST' && p === '/api/seller/pay') {
         if (!can('pay_settings')) return J(403, { error: 'You do not have access to payment settings.' }); const pay = s.pay || {};
@@ -399,6 +401,7 @@ const handler = async (event) => {
         if (limited(ip, 'sc', 10, 900e3)) return J(429, { error: 'Too many tries. Wait a few minutes.' });
         if (b.action === 'logout_all') { if (s._me) { s._me.uv = (s._me.uv | 0) + 1; } else s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged out of all devices' + (s._me ? ' (' + s._me.name + ')' : ''), ip); return J(200, { ok: true, token: tok(s, role, s._sid) }); }
         if (b.action === 'password') { const who = s._me || s, old = pinHash(String(b.old || '').slice(0, 64), who.salt); if (old.length !== who.pin.length || !crypto.timingSafeEqual(Buffer.from(old), Buffer.from(who.pin))) return J(400, { error: 'Your current password is not right.' }); const pe = passOk(b.next); if (pe) return J(400, { error: pe }); who.salt = crypto.randomBytes(16).toString('hex'); who.pin = pinHash(String(b.next), who.salt); if (s._me) s._me.uv = (s._me.uv | 0) + 1; else s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Password changed' + (s._me ? ' (' + s._me.name + ')' : ''), ip); return J(200, { ok: true, token: tok(s, role, s._sid) }); }
+        if (b.action === 'delete_account') { if (s._me) return J(403, { error: 'Only the shop owner can close the account.' }); const old = pinHash(String(b.old || '').slice(0, 64), s.salt); if (old.length !== s.pin.length || !crypto.timingSafeEqual(Buffer.from(old), Buffer.from(s.pin))) return J(400, { error: 'Your current password is not right.' }); s.deleted = true; s.deletedAt = new Date().toISOString(); s.listed = false; s.open = false; s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Account closed by owner', ip); return J(200, { ok: true }); }
         return J(400, { error: 'Try again.' });
       }
       if (M === 'GET' && p === '/api/seller/payments') {
