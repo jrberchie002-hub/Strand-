@@ -454,7 +454,8 @@ const handler = async (event) => {
       if (M === 'GET' && p === '/api/customer/order') {
         const q = event.queryStringParameters || {}, slug = str(q.slug, 40), no = str(q.no, 12); const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no);
         if (!o || o.custId !== cu.id) return J(404, { error: 'Order not found.' });
-        return J(200, { order: Object.assign({ slug }, o) });
+        const s2 = await kvGet('store:' + slug);
+        return J(200, { order: Object.assign({ slug, plan: s2 ? planOf(s2) : 'base' }, o) });
       }
       if (p === '/api/customer/security' && M === 'POST') {
         if (limited(ip, 'csc', 10, 900e3)) return J(429, { error: 'Too many tries. Wait a few minutes.' });
@@ -470,7 +471,8 @@ const handler = async (event) => {
       const q = event.queryStringParameters || {}, slug = str(q.slug, 40), no = str(q.no, 12), phone = str(q.phone, 20);
       const ord = (await kvGet('orders:' + slug)) || { l: [] }, o = ord.l.find(x => x.no === no);
       if (!o || !phone || phoneKey(phone) !== phoneKey(o.phone)) return J(404, { error: "We couldn't find that order. Check the order number and phone number." });
-      return J(200, { order: { no: o.no, at: o.at, total: o.total, status: o.status, paid: !!o.paid, eta: o.eta || '', items: o.items } });
+      const s3 = await kvGet('store:' + slug);
+      return J(200, { order: { no: o.no, at: o.at, total: o.total, status: o.status, paid: !!o.paid, eta: o.eta || '', items: o.items, plan: s3 ? planOf(s3) : 'base' } });
     }
     /* ---------- Strand's own platform team and dashboard ---------- */
     if (p.startsWith('/api/platform')) {
