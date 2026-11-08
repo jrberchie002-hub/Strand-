@@ -531,12 +531,12 @@ function lyMove(k,dx){var o=lyOrd(),i=o.indexOf(k),j=i+dx;if(j<0||j>=o.length)re
 function lyShuffle(){lyN(1+Math.floor(Math.random()*120))}
 function lySave(){var d=lyGet();saveS({layout:{n:d.n,parts:d.parts,ord:lyOrd(),off:d.off},pal:d.pal})}
 function settingsRe(){var y=window.scrollY;draw();window.scrollTo(0,y)}
-var LAYOUT_BASE_MAX=3,LAYOUT_PRO_MAX=12;
+var LAYOUT_BASE_MAX=2,LAYOUT_PRO_MAX=12;
 var ACCENT_BASE=['#d4001a','#0a6e3d','#1657d1','#7c3aed'],ACCENT_PRO=ACCENT_BASE.concat(['#ea580c','#0891b2','#be185d','#111111']);
 function accentChips(cur,list){return list.map(function(c){return'<button class="chip'+(cur===c?' on':'')+'" style="padding:8px" onclick="saveS({accent:\''+c+'\'})" aria-label="Use this colour"><span style="display:inline-block;width:18px;height:18px;border-radius:50%;background:'+c+';vertical-align:middle"></span></button>'}).join('')}
 function layoutCard(){var d=lyGet(),e=lyEff(),o=lyOrd(),nm=layName(d.n),plan=D.store.plan;
  if(plan==='base'){
-  return'<div class="card"><h3>Your store look</h3><p class="mu">Pick one of your 3 starter looks. Ask for Plus to pick from more, or Pro for the full library and your own colours.</p><div class="chips">'+LPRE.slice(0,LAYOUT_BASE_MAX).map(function(x,i){return'<button class="lychip'+(d.n===i+1?' on':'')+'" onclick="lyN('+(i+1)+');lySave()">'+laySwatch(i+1,d.pal)+'<span>'+x[0]+'</span></button>'}).join('')+'</div><p class="mu" style="margin:-4px 0 0">'+layDesc(d.n)+'</p><a class="btn o" style="text-decoration:none;margin-top:12px" target="_blank" rel="noopener" href="/s/'+esc(D.store.slug)+'">See my store</a></div>';
+  return'<div class="card"><h3>Your store look</h3><p class="mu">Pick one of your 2 starter looks. Ask for Plus to pick from more, or Pro for the full library and your own colours.</p><div class="chips">'+LPRE.slice(0,LAYOUT_BASE_MAX).map(function(x,i){return'<button class="lychip'+(d.n===i+1?' on':'')+'" onclick="lyN('+(i+1)+');lySave()">'+laySwatch(i+1,d.pal)+'<span>'+x[0]+'</span></button>'}).join('')+'</div><p class="mu" style="margin:-4px 0 0">'+layDesc(d.n)+'</p><a class="btn o" style="text-decoration:none;margin-top:12px" target="_blank" rel="noopener" href="/s/'+esc(D.store.slug)+'">See my store</a></div>';
  }
  if(plan==='pro'){
   var opts=LPRE.slice(0,LAYOUT_PRO_MAX);
