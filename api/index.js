@@ -601,12 +601,17 @@ const handler = async (event) => {
         const stores = await Promise.all(x.l.map(sl => kvGet('store:' + sl)));
         const present = x.l.map((sl, i) => ({ sl, st: stores[i] })).filter(r => r.st);
         const orderDocs = await Promise.all(present.map(r => kvGet('orders:' + r.sl)));
-        const out = present.map((r, i) => { const st = r.st, o = orderDocs[i] || { l: [] }; return { slug: r.sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', plan: st.plan || 'base', theme: st.theme || 'classic', currency: st.currency || 'GHS', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, comp: !!st.comp, suspended: st.suspended ? { reason: st.suspended.reason || '', at: st.suspended.at } : null, appeal: (st.appeal && st.appeal.status === 'pending') ? { text: st.appeal.text, at: st.appeal.at } : null, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, createdAt: st.createdAt || '' }; });
+        const out = present.map((r, i) => { const st = r.st, o = orderDocs[i] || { l: [] }; return { slug: r.sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', area: st.area || '', about: st.about || '', plan: st.plan || 'base', theme: st.theme || 'classic', currency: st.currency || 'GHS', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, comp: !!st.comp, suspended: st.suspended ? { reason: st.suspended.reason || '', at: st.suspended.at } : null, appeal: (st.appeal && st.appeal.status === 'pending') ? { text: st.appeal.text, at: st.appeal.at } : null, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, createdAt: st.createdAt || '' }; });
         return J(200, { shops: out });
       }
       if (M === 'POST' && p === '/api/platform/shop') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to change stores.' }); const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' });
         if (PLANS.includes(b.plan)) st.plan = b.plan; if (typeof b.verified === 'boolean') st.verified = b.verified; if (typeof b.open === 'boolean') st.open = b.open; if (b.paidUntil !== undefined) st.paidUntil = /^\d{4}-\d{2}-\d{2}/.test(b.paidUntil) ? new Date(b.paidUntil).toISOString() : ''; if (typeof b.comp === 'boolean') st.comp = b.comp;
+        if (b.name !== undefined) { const nm3 = str(b.name, 40); if (nm3.length < 2) return J(400, { error: 'Give the store a name.' }); st.name = nm3; }
+        if (b.area !== undefined) st.area = str(b.area, 40);
+        if (b.about !== undefined) st.about = str(b.about, 200);
+        if (b.type !== undefined && TYPES[b.type]) { st.type = b.type; st.types = [b.type]; }
+        if (b.name !== undefined || b.area !== undefined || b.about !== undefined || b.type !== undefined) await secLog('platform', 'Edited the profile for ' + st.slug + ' (' + pm.name + ')', ip);
         if (b.suspend !== undefined) { const reason = str(b.suspend, 300); if (reason) { st.suspended = { reason, at: new Date().toISOString(), by: pm.name }; await secLog('platform', 'Suspended ' + st.slug + ': ' + reason + ' (' + pm.name + ')', ip); } }
         if (b.unsuspend) { st.suspended = null; if (st.appeal) st.appeal.status = 'resolved'; await secLog('platform', 'Lifted suspension on ' + st.slug + ' (' + pm.name + ')', ip); }
         let assignedPin = '';
@@ -634,6 +639,17 @@ const handler = async (event) => {
         await secLog('platform', 'Opened the editor for ' + st9.slug + ' (' + pm.name + ')', ip);
         await secLog(st9.slug, 'Opened by a platform admin (' + pm.name + ')', ip);
         return J(200, { token: tok(st9, 'owner'), slug: st9.slug });
+      }
+      if (p === '/api/platform/control') {
+        if (!pcan('control')) return J(403, { error: 'You do not have access to platform settings.' });
+        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1 }); }
+        const c3 = await ctlGet();
+        if (b.banner !== undefined) c3.banner = str(b.banner, 120);
+        if (typeof b.maintenance === 'boolean') c3.maint = b.maintenance;
+        if (b.nameLimit !== undefined) { const n = Math.max(0, Math.min(20, +b.nameLimit || 0)); c3.nameLimit = n; }
+        if (b.slugLimit !== undefined) { const n = Math.max(0, Math.min(20, +b.slugLimit || 0)); c3.slugLimit = n; }
+        await kvSet('ctl', c3); await secLog('platform', 'Changed platform settings (' + pm.name + ')', ip);
+        return J(200, { ok: true });
       }
       if (M === 'GET' && p === '/api/platform/requests') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l }); }
       if (M === 'POST' && p === '/api/platform/request') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
@@ -675,7 +691,35 @@ const handler = async (event) => {
       if (M === 'GET' && p === '/api/seller/me') {
         const ord = canOrders ? ((await kvGet('orders:' + s.slug)) || { l: [] }) : { l: [] }, d = new Date().toISOString().slice(0, 10), today = ord.l.filter(o => o.at.slice(0, 10) === d && o.status !== 'cancelled'), pr = s.products || [];
         const full = pubStore(s, true); if (can('settings')) { full.goals = s.goals || []; full.sale = s.sale || { on: false, pct: 10 }; full.email = s.email || ''; full.phone = s.phone || ''; full.wa = s.wa !== false && !!s.phone; full.listed = s.listed !== false; full.apps = s.apps || {}; full.codes = s.codes || []; full.fee = s.fee || 0; full.freeAbove = s.freeAbove || 0; } if (can('pay_settings')) full.payCfg = { cod: (s.pay || {}).cod !== false, momo: (s.pay || {}).momo || null, link: (s.pay || {}).link || '', paystack: (s.pay || {}).paystack ? { last4: s.pay.paystack.last4, mode: s.pay.paystack.mode } : null, payOutRequested: !!s.payOutRequested }; if (!can('costs')) full.products.forEach(x => { delete x.cost; }); full.domain = s.domain || null; full.rules = s.rules || {}; full.notify = s.notify || {}; full.paidUntil = s.paidUntil || ''; full.planRaw = s.plan || 'base'; full.createdAt = s.createdAt || '';
+        const ctlLim = await ctlGet(); const nameLim = ctlLim.nameLimit != null ? ctlLim.nameLimit : 2, slugLim = ctlLim.slugLimit != null ? ctlLim.slugLimit : 1;
+        if (can('settings')) full.limits = { name: { used: s.nameChanges || 0, max: nameLim }, slug: { used: s.slugChanges || 0, max: slugLim } };
         return J(200, { role, store: full, suspended: s.suspended ? { reason: s.suspended.reason || '', at: s.suspended.at } : null, appeal: s.appeal ? { status: s.appeal.status, at: s.appeal.at } : null, orders: ord.l.slice(0, 100), perms: PERM_ALL.filter(x => can(x)), matrix: PERMS, roles: ROLES, me: s._me ? { id: s._me.id, name: s._me.name, avatar: '' } : { id: '', name: s.ownerName || 'Owner', avatar: s.ownerAvatar || '' }, staff: can('team') ? (s.staff || []).map(x => ({ id: x.id, name: x.name, role: x.role, off: !!x.off, lastLogin: x.lastLogin || '', login: String(x.key || '').replace(/^(phone|email):/, '').replace(/^(.{3}).*(.{3})$/, '$1•••$2') })) : [], paid, stats: { today: today.length, revenueToday: can('analytics') ? today.reduce((t, o) => t + o.total, 0) : 0, total: ord.l.length, newCount: ord.l.filter(o => o.status === 'new').length, low: pr.filter(x => x.stock != null && x.stock <= 3).length, stockValue: can('costs') ? pr.reduce((t, x) => t + (x.stock || 0) * (x.cost || 0), 0) : 0, retailValue: can('costs') ? pr.reduce((t, x) => t + (x.stock || 0) * x.price, 0) : 0 } });
+      }
+      if (M === 'POST' && p === '/api/seller/store' && b.newSlug !== undefined) {
+        if (role !== 'owner') return J(403, { error: 'Only the store owner can change the store handle.' });
+        const ns = slugify(b.newSlug);
+        if (!ns || ns.length < 2) return J(400, { error: 'Pick a handle with letters or numbers.' });
+        if (ns === s.slug) return J(200, { ok: true, slug: ns });
+        const ctlS = await ctlGet(), slugLim2 = ctlS.slugLimit != null ? ctlS.slugLimit : 1, used2 = s.slugChanges || 0;
+        if (used2 >= slugLim2) return J(402, { error: 'You have used all ' + slugLim2 + ' of your handle changes. Contact us if you need another.' });
+        if (RESERVED.includes(ns)) return J(409, { error: 'That handle is reserved.' });
+        if (await kvGet('store:' + ns)) return J(409, { error: 'That handle is already taken.' });
+        const oldSlug = s.slug;
+        const [ordersDoc, secDoc, invDoc] = await Promise.all([kvGet('orders:' + oldSlug), kvGet('sec:' + oldSlug), kvGet('inv:' + oldSlug)]);
+        await Promise.all([
+          kvSet('store:' + oldSlug, null),
+          ordersDoc ? kvSet('orders:' + ns, ordersDoc) : null, ordersDoc ? kvSet('orders:' + oldSlug, null) : null,
+          secDoc ? kvSet('sec:' + ns, secDoc) : null, secDoc ? kvSet('sec:' + oldSlug, null) : null,
+          invDoc ? kvSet('inv:' + ns, invDoc) : null, invDoc ? kvSet('inv:' + oldSlug, null) : null,
+          s.phone ? kvSet('phone:' + s.phone, { slug: ns }) : null,
+          s.email ? kvSet('email:' + s.email, { slug: ns }) : null,
+          (s.domain && s.domain.name) ? kvSet('domain:' + s.domain.name, { slug: ns, status: s.domain.status }) : null,
+        ].filter(Boolean));
+        const idxDoc = (await kvGet('idx')) || { l: [] }; const ix = idxDoc.l.indexOf(oldSlug); if (ix > -1) { idxDoc.l[ix] = ns; await kvSet('idx', idxDoc); }
+        s.slug = ns; s.slugChanges = used2 + 1; s.sv = (s.sv | 0) + 1;
+        await kvSet('store:' + ns, s);
+        await secLog(ns, 'Store handle changed from @' + oldSlug + ' to @' + ns + (s._me ? ' (' + s._me.name + ')' : ''), ip);
+        return J(200, { ok: true, slug: ns, token: tok(s, role, s._sid) });
       }
       if (M === 'POST' && p === '/api/seller/store') {
         { const dz0 = ['name', 'theme', 'accent', 'announce', 'hero', 'banner', 'social', 'logo', 'cartWord', 'receiptCode'].some(k => b[k] !== undefined), pl0 = ['about', 'area', 'hours', 'delivery', 'open', 'type', 'types', 'listed', 'wa', 'team', 'currency'].some(k => b[k] !== undefined), lz0 = ['layout', 'pal'].some(k => b[k] !== undefined), oz0 = ['ownerName', 'ownerAvatar'].some(k => b[k] !== undefined); if (oz0 && s._me) return J(403, { error: 'Only the store owner has their own profile here — team members use their own name and login.' }); if (lz0 && !can('design')) return J(403, { error: 'You do not have access to change this.' }); if ((pl0 && !can('settings')) || (dz0 && !can('design')) || (!pl0 && !dz0 && !lz0 && !oz0)) return J(403, { error: 'You do not have access to change this.' }); }
@@ -686,7 +730,7 @@ const handler = async (event) => {
         if (b.logo !== undefined) { if (!b.logo) s.logo = ''; else { const pi = await picIn(b.logo, b, 'That logo'); if (pi.error) return J(400, { error: pi.error }); s.logo = pi.img; } }
         const design = ['name', 'theme', 'announce', 'hero', 'banner', 'social', 'cartWord'].some(k => b[k] !== undefined);
         if (design && !paid) return J(402, { error: 'Changing your name, theme and look is part of the Plus plan.', upgrade: true });
-        if (b.name !== undefined && str(b.name, 40).length >= 2) s.name = str(b.name, 40);
+        if (b.name !== undefined) { const nmNew = str(b.name, 40); if (nmNew.length >= 2 && nmNew !== s.name) { const ctlN = await ctlGet(), nameLim2 = ctlN.nameLimit != null ? ctlN.nameLimit : 2, usedN = s.nameChanges || 0; if (usedN >= nameLim2) return J(402, { error: 'You have used all ' + nameLim2 + ' of your name changes. Contact us if you need another.' }); s.name = nmNew; s.nameChanges = usedN + 1; } }
         if (THEMES.includes(b.theme) && b.theme !== s.theme) { if (THEME_EXPERT.has(b.theme) && !isTopDesign(planOf(s))) return J(402, { error: 'That look is part of the Pro plan.', upgrade: true }); s.theme = b.theme; if (THEME_LAYOUT[b.theme]) s.layout = cleanLayout({ n: THEME_LAYOUT[b.theme] }, s.layout); }
         if (b.accent !== undefined) { const pl4 = planOf(s), ok = isTopDesign(pl4) ? /^#[0-9a-f]{6}$/i.test(b.accent) : pl4 === 'pro' ? ACCENT_PRO.includes(b.accent) : ACCENT_BASE.includes(b.accent); if (!ok) return J(402, { error: pl4 === 'pro' ? 'That colour is part of the Pro plan.' : 'Pick one of your 4 starter colours, or ask for Plus to unlock more.', upgrade: true }); s.accent = b.accent; }
         if (b.announce !== undefined) s.announce = str(b.announce, 90); if (b.cartWord === 'cart' || b.cartWord === 'bag') s.cartWord = b.cartWord;
