@@ -98,7 +98,7 @@ const RESERVED = ['app', 'api', 's', 'admin', 'login', 'signup', 'sample', 'www'
 const TYPES = { food: 'Food & drinks', thrift: 'Thrift & fashion', shoes: 'Shoes & sneakers', phones: 'Phones & gadgets', beauty: 'Beauty & care', home: 'Home & living', shipping: 'Shipping & delivery', other: 'Something else' };
 const GOALS = ['sell', 'stock', 'pay', 'person', 'brand', 'deliver', 'team'];
 const WEAK = new Set(['123456', '1234567', '12345678', '123456789', '0000000', '000000', '111111', '222222', '333333', '444444', '555555', '666666', '777777', '888888', '999999', '654321', 'password', 'qwerty', 'abc123', 'iloveyou', 'admin', 'letmein', 'welcome', 'strand']);
-const passOk = p => { p = String(p || ''); if (p.length < 6 || p.length > 64) return 'Choose a password with at least 6 characters.'; const l = p.toLowerCase(); if (WEAK.has(l) || /^(.)\1+$/.test(p) || '01234567890123456789'.includes(l) || '98765432109876543210'.includes(l) || 'abcdefghijklmnopqrstuvwxyz'.includes(l) || /^(qwerty|asdf|zxcv|password)/.test(l)) return 'That password is too easy to guess. Try something harder.'; return ''; };
+const passOk = p => { p = String(p || ''); if (/\s/.test(p)) return 'Passwords cannot contain spaces.'; if (p.length < 8 || p.length > 64) return 'Choose a password with at least 8 characters.'; if (!/[A-Za-z]/.test(p) || !/[0-9]/.test(p) || !/[^A-Za-z0-9]/.test(p)) return 'Use a mix of letters, numbers and a symbol (like . or ,) to make it strong.'; const l = p.toLowerCase(); if (WEAK.has(l) || /^(.)\1+$/.test(p) || '01234567890123456789'.includes(l) || '98765432109876543210'.includes(l) || 'abcdefghijklmnopqrstuvwxyz'.includes(l) || /^(qwerty|asdf|zxcv|password)/.test(l)) return 'That password is too easy to guess. Try something harder.'; return ''; };
 const emailKey = e => { e = String(e || '').trim().toLowerCase(); return e.length <= 254 && /^[^@\s]{1,64}@[^@\s]{1,190}\.[a-z]{2,}$/.test(e) ? e : ''; };
 const acctKey = id => { const e = emailKey(id); if (e) return 'email:' + e; const p = phoneKey(id); return p ? 'phone:' + p : ''; };
 const maskIp = ip => String(ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.x.x').replace(/(:[0-9a-f]*){4}$/i, ':x:x:x:x').slice(0, 24);
@@ -237,8 +237,8 @@ const handler = async (event) => {
       if (b.hp) return J(400, { error: 'That did not look right. Try again.' });
       const ph = phoneKey(b.phone), em = emailKey(b.email), name = str(b.storeName, 40), pw = String(b.pin || '');
       if (name.length < 2) return J(400, { error: 'Give your store a name.' });
-      if (b.phone && !ph) return J(400, { error: 'That phone number does not look right. Try 024 123 4567.' }); if (b.email && !em) return J(400, { error: 'That email does not look right.' });
-      if (!ph && !em) return J(400, { error: 'Add a phone number or an email so you can log in.' });
+      if (!b.phone) return J(400, { error: 'Add a phone number so you can log in and get paid.' }); if (!ph) return J(400, { error: 'That phone number does not look right. Try 024 123 4567.' });
+      if (!b.email) return J(400, { error: 'Add an email so you can log in.' }); if (!em) return J(400, { error: 'That email does not look right.' });
       const pe = passOk(pw); if (pe) return J(400, { error: pe });
       if ((ph && await kvGet('phone:' + ph)) || (em && await kvGet('email:' + em))) return J(409, { error: 'An account with those details already exists. Log in instead.' });
       let slug = slugify(b.slug || name) || 'shop'; if (RESERVED.includes(slug)) slug += '-shop'; let i = 1, base = slug; while (await kvGet('store:' + slug)) slug = base + '-' + (++i);
