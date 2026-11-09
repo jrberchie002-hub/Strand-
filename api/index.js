@@ -281,6 +281,7 @@ const handler = async (event) => {
       if (rec.staff) who.lastLogin = new Date().toISOString(), await kvSet('store:' + s.slug, s); await secLog(s.slug, 'Logged in' + (rec.staff ? ' (' + who.name + ')' : ''), ip);
       return J(200, { token: tok(s, role, rec.staff || ''), slug: s.slug, role });
     }
+    if (M === 'GET' && p === '/api/prices') { const pr = PRICE(); return J(200, { plus: pr.pro, pro: pr.expert, business: pr.business, plusYearly: pr.proYearly, proYearly: pr.expertYearly }); }
     if (M === 'GET' && p === '/api/host') { const d = await kvGet('domain:' + str((event.queryStringParameters || {}).h, 100).toLowerCase().replace(/^www\./, '')); if (d && d.status === 'active') return J(200, { slug: d.slug }); return J(404, { error: 'Not found' }); }
     if (M === 'GET' && p === '/api/explore') {
       if (limited(ip, 'ex', 60, 600e3)) return J(429, { error: 'Slow down a little.' }); const q = event.queryStringParameters || {}, ty = TYPES[q.type] ? q.type : '', x = (await kvGet('idx')) || { l: [] }, out = [], counts = {};
