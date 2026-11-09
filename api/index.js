@@ -11,6 +11,21 @@ const mem = new Map();
 const cleanEnv = v => String(v || '').trim().replace(/^['"]|['"]$/g, '').trim();
 const fbProjectId = () => cleanEnv(E.FIREBASE_PROJECT_ID), fbClientEmail = () => cleanEnv(E.FIREBASE_CLIENT_EMAIL), fbPrivateKey = () => cleanEnv(E.FIREBASE_PRIVATE_KEY).replace(/\\n/g, '\n');
 const fbOn = () => fbProjectId() && fbClientEmail() && fbPrivateKey();
+/* ---------- video hosting: Vercel Blob (needed because a video is too big to store inline like our product photos) ---------- */
+const blobOn = () => !!cleanEnv(E.BLOB_READ_WRITE_TOKEN);
+async function blobPut(filename, buffer, contentType) {
+  if (!blobOn()) throw new Error('Video uploads are not set up yet. In the Vercel dashboard, open this project, go to Storage, create a Blob store, then redeploy.');
+  let put;
+  try { ({ put } = require('@vercel/blob')); } catch (e) { throw new Error('The @vercel/blob package is not installed yet. Add it to package.json and redeploy, then try again.'); }
+  const { url } = await put(filename, buffer, { access: 'public', contentType, token: cleanEnv(E.BLOB_READ_WRITE_TOKEN), addRandomSuffix: true });
+  return url;
+}
+function decodeDataUrl(d) {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(String(d || ''));
+  if (!m) return null;
+  return { contentType: m[1], buffer: Buffer.from(m[2], 'base64') };
+}
+const MAX_VIDEO_BYTES = 4.5 * 1024 * 1024, MAX_VIDEO_SECONDS = 12;
 const b64u = s => Buffer.from(s).toString('base64url');
 let _fbTok = '', _fbTokExp = 0;
 async function fbToken() {   // trades the service account key for a short-lived access token; cached until near expiry
@@ -164,7 +179,7 @@ const LAYOUT_BASE_MAX = 2, LAYOUT_PRO_MAX = 12;   // Base picks from the first 2
 const ACCENT_BASE = ['#d4001a', '#0a6e3d', '#1657d1', '#7c3aed'];   // red, green, blue, purple - the 4 starter accent colours for Base
 const ACCENT_PRO = ACCENT_BASE.concat(['#ea580c', '#0891b2', '#be185d', '#111111']);   // + orange, teal, pink, near-black for the mid plan; Expert gets any hex
 const THEME_LAYOUT = { editorial: 13, aura: 14 };   // picking one of these looks also switches to its matching layout, so it actually looks different, not just a colour change
-const pubStore = (s, full) => ({ slug: s.slug, name: s.name, logo: s.logo || '', currency: CURRENCIES.includes(s.currency) ? s.currency : 'GHS', cartWord: s.cartWord === 'bag' ? 'bag' : 'cart', about: s.about || '', whatsapp: (s.wa !== false && s.phone) ? s.phone : '', call: (s.wa === false && s.phone) ? s.phone : '', type: s.type || 'other', typeName: TYPES[s.type] || TYPES.other, types: (s.types && s.types.length ? s.types : [s.type || 'other']).filter(t => TYPES[t]), area: s.area || '', hours: s.hours || '', delivery: s.delivery || '', open: s.open !== false, accent: s.accent || '#d4001a', plan: planOf(s), theme: s.theme || 'classic', layout: s.layout || null, pal: s.pal || '', verified: !!s.verified, dl: !!(s.apps || {}).delivery, fee: (s.apps || {}).delivery ? (s.fee || 0) : 0, freeAbove: (s.apps || {}).delivery ? (s.freeAbove || 0) : 0, dc: !!(s.apps || {}).discounts, announce: s.announce || '', policies: s.policies || {}, minOrder: (s.rules || {}).minOrder || 0, maxQty: (s.rules || {}).maxQty || 0, domain: (s.domain && s.domain.status === 'active') ? s.domain.name : '', pay: payMethods(s), reqPhone: planOf(s) === 'base' ? true : s.reqPhone !== false, receiptCode: isTopDesign(planOf(s)) ? (['none', 'barcode', 'qr'].includes(s.receiptCode) ? s.receiptCode : 'qr') : 'none', hero: s.hero || {}, banner: s.banner || {}, social: s.social || {}, products: (s.products || []).filter(p => full || p.on !== false).map(p => full ? Object.assign(pubProd(p), { cost: p.cost || 0, sku: p.sku || '' }) : (saleOn(s) ? Object.assign(pubProd(p), { price: salePx(s, p), was: p.price, badge: p.badge || '-' + s.sale.pct + '%' }) : pubProd(p))) });
+const pubStore = (s, full) => ({ slug: s.slug, name: s.name, logo: s.logo || '', currency: CURRENCIES.includes(s.currency) ? s.currency : 'GHS', cartWord: s.cartWord === 'bag' ? 'bag' : 'cart', about: s.about || '', whatsapp: (s.wa !== false && s.phone) ? s.phone : '', call: (s.wa === false && s.phone) ? s.phone : '', type: s.type || 'other', typeName: TYPES[s.type] || TYPES.other, types: (s.types && s.types.length ? s.types : [s.type || 'other']).filter(t => TYPES[t]), area: s.area || '', hours: s.hours || '', delivery: s.delivery || '', open: s.open !== false, accent: s.accent || '#d4001a', plan: planOf(s), theme: s.theme || 'classic', layout: s.layout || null, pal: s.pal || '', verified: !!s.verified, dl: !!(s.apps || {}).delivery, fee: (s.apps || {}).delivery ? (s.fee || 0) : 0, freeAbove: (s.apps || {}).delivery ? (s.freeAbove || 0) : 0, dc: !!(s.apps || {}).discounts, announce: s.announce || '', policies: s.policies || {}, minOrder: (s.rules || {}).minOrder || 0, maxQty: (s.rules || {}).maxQty || 0, domain: (s.domain && s.domain.status === 'active') ? s.domain.name : '', pay: payMethods(s), reqPhone: planOf(s) === 'base' ? true : s.reqPhone !== false, receiptCode: isTopDesign(planOf(s)) ? (['none', 'barcode', 'qr'].includes(s.receiptCode) ? s.receiptCode : 'qr') : 'none', hero: s.hero || {}, heroVideo: s.heroVideo || '', banner: s.banner || {}, social: s.social || {}, products: (s.products || []).filter(p => full || p.on !== false).map(p => full ? Object.assign(pubProd(p), { cost: p.cost || 0, sku: p.sku || '' }) : (saleOn(s) ? Object.assign(pubProd(p), { price: salePx(s, p), was: p.price, badge: p.badge || '-' + s.sale.pct + '%' }) : pubProd(p))) });
 /* ---------- seed sample store so the platform can be shown at once ---------- */
 async function addIdx(slug) { const x = (await kvGet('idx')) || { l: [] }; if (!x.l.includes(slug)) { x.l.push(slug); await kvSet('idx', x); } }
 const STYPE = { classic: 'food', noir: 'thrift', linen: 'thrift', fresh: 'home', tech: 'phones', soft: 'beauty', spotlight: 'shoes', corner: 'other' };
@@ -642,7 +657,7 @@ const handler = async (event) => {
       }
       if (p === '/api/platform/control') {
         if (!pcan('control')) return J(403, { error: 'You do not have access to platform settings.' });
-        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1 }); }
+        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1, heroVideo: c2.heroVideo || '' }); }
         const c3 = await ctlGet();
         if (b.banner !== undefined) c3.banner = str(b.banner, 120);
         if (typeof b.maintenance === 'boolean') c3.maint = b.maintenance;
@@ -651,6 +666,20 @@ const handler = async (event) => {
         await kvSet('ctl', c3); await secLog('platform', 'Changed platform settings (' + pm.name + ')', ip);
         return J(200, { ok: true });
       }
+      if (M === 'POST' && p === '/api/platform/hero-video') {
+        if (!pcan('control')) return J(403, { error: 'You do not have access to platform settings.' });
+        const c4 = await ctlGet();
+        if (b.remove) { c4.heroVideo = ''; await kvSet('ctl', c4); return J(200, { ok: true }); }
+        const dur = Number(b.duration) || 0;
+        if (dur > MAX_VIDEO_SECONDS) return J(400, { error: 'Keep the video under ' + MAX_VIDEO_SECONDS + ' seconds.' });
+        const dec = decodeDataUrl(b.data);
+        if (!dec || !/^video\//.test(dec.contentType)) return J(400, { error: 'That is not a video file.' });
+        if (dec.buffer.length > MAX_VIDEO_BYTES) return J(400, { error: 'That video is too big (max ' + (MAX_VIDEO_BYTES / 1024 / 1024).toFixed(1) + 'MB). Trim it or lower the quality and try again.' });
+        let url; try { url = await blobPut('landing/hero-' + Date.now() + '.mp4', dec.buffer, dec.contentType); } catch (e) { return J(400, { error: e.message }); }
+        c4.heroVideo = url; await kvSet('ctl', c4); await secLog('platform', 'Changed the landing page hero video (' + pm.name + ')', ip);
+        return J(200, { ok: true, url });
+      }
+      if (M === 'GET' && p === '/api/landing') { const c5 = await ctlGet(); return J(200, { heroVideo: c5.heroVideo || '' }); }
       if (M === 'GET' && p === '/api/platform/requests') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l }); }
       if (M === 'POST' && p === '/api/platform/request') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
       if (p === '/api/platform/team') {
@@ -694,6 +723,18 @@ const handler = async (event) => {
         const ctlLim = await ctlGet(); const nameLim = ctlLim.nameLimit != null ? ctlLim.nameLimit : 2, slugLim = ctlLim.slugLimit != null ? ctlLim.slugLimit : 1;
         if (can('settings')) full.limits = { name: { used: s.nameChanges || 0, max: nameLim }, slug: { used: s.slugChanges || 0, max: slugLim } };
         return J(200, { role, store: full, suspended: s.suspended ? { reason: s.suspended.reason || '', at: s.suspended.at } : null, appeal: s.appeal ? { status: s.appeal.status, at: s.appeal.at } : null, orders: ord.l.slice(0, 100), perms: PERM_ALL.filter(x => can(x)), matrix: PERMS, roles: ROLES, me: s._me ? { id: s._me.id, name: s._me.name, avatar: '' } : { id: '', name: s.ownerName || 'Owner', avatar: s.ownerAvatar || '' }, staff: can('team') ? (s.staff || []).map(x => ({ id: x.id, name: x.name, role: x.role, off: !!x.off, lastLogin: x.lastLogin || '', login: String(x.key || '').replace(/^(phone|email):/, '').replace(/^(.{3}).*(.{3})$/, '$1•••$2') })) : [], paid, stats: { today: today.length, revenueToday: can('analytics') ? today.reduce((t, o) => t + o.total, 0) : 0, total: ord.l.length, newCount: ord.l.filter(o => o.status === 'new').length, low: pr.filter(x => x.stock != null && x.stock <= 3).length, stockValue: can('costs') ? pr.reduce((t, x) => t + (x.stock || 0) * (x.cost || 0), 0) : 0, retailValue: can('costs') ? pr.reduce((t, x) => t + (x.stock || 0) * x.price, 0) : 0 } });
+      }
+      if (M === 'POST' && p === '/api/seller/hero-video') {
+        if (role !== 'owner') return J(403, { error: 'Only the store owner can change the banner video.' });
+        if (b.remove) { s.heroVideo = ''; s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s); return J(200, { ok: true }); }
+        const dur = Number(b.duration) || 0;
+        if (dur > MAX_VIDEO_SECONDS) return J(400, { error: 'Keep the video under ' + MAX_VIDEO_SECONDS + ' seconds.' });
+        const dec = decodeDataUrl(b.data);
+        if (!dec || !/^video\//.test(dec.contentType)) return J(400, { error: 'That is not a video file.' });
+        if (dec.buffer.length > MAX_VIDEO_BYTES) return J(400, { error: 'That video is too big (max ' + (MAX_VIDEO_BYTES / 1024 / 1024).toFixed(1) + 'MB). Trim it or lower the quality and try again.' });
+        let url; try { url = await blobPut('hero/' + s.slug + '-' + Date.now() + '.mp4', dec.buffer, dec.contentType); } catch (e) { return J(400, { error: e.message }); }
+        s.heroVideo = url; s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s);
+        return J(200, { ok: true, url });
       }
       if (M === 'POST' && p === '/api/seller/store' && b.newSlug !== undefined) {
         if (role !== 'owner') return J(403, { error: 'Only the store owner can change the store handle.' });
