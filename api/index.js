@@ -108,8 +108,8 @@ async function sendOtpMail(email, code) { try { if (!E.RESEND_API_KEY) return fa
 async function sendResetMail(email, code) { try { if (!E.RESEND_API_KEY) return false; await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [email], subject: 'Reset your Strand password: ' + code, text: 'Use this code to reset your Strand account password:\n\n' + code + '\n\nIt expires in 10 minutes. If you did not ask for this, ignore this email - your password will not change.' }) }); return true; } catch (e) { return false; } }
 const FAKE_SALT = 'f'.repeat(24);
 const ROLES = { owner: 'Owner', admin: 'Admin', manager: 'Store manager', sales: 'Sales manager', accountant: 'Accountant', cashier: 'Cashier', assistant: 'Assistant', inventory: 'Stock keeper', developer: 'Developer' };
-const PERM_ALL = ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'pay_settings', 'analytics', 'team', 'settings', 'design', 'apps', 'domain', 'policies', 'notify', 'security', 'billing'];
-const PERMS = { owner: PERM_ALL, admin: PERM_ALL.filter(x => x !== 'billing'), manager: ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'analytics', 'policies', 'notify'], sales: ['orders', 'orders_edit', 'pos', 'pay_view', 'pay_confirm', 'analytics'], accountant: ['pay_view', 'pay_confirm', 'pay_settings', 'costs', 'analytics'], cashier: ['orders', 'pos', 'pay_confirm'], assistant: ['orders', 'orders_edit'], inventory: ['stock'], developer: ['design', 'apps', 'domain'] };
+const PERM_ALL = ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'pay_settings', 'analytics', 'team', 'settings', 'design', 'apps', 'domain', 'policies', 'notify', 'security', 'billing', 'chat'];
+const PERMS = { owner: PERM_ALL, admin: PERM_ALL.filter(x => x !== 'billing'), manager: ['orders', 'orders_edit', 'products', 'costs', 'stock', 'pos', 'pay_view', 'pay_confirm', 'analytics', 'policies', 'notify', 'chat'], sales: ['orders', 'orders_edit', 'pos', 'pay_view', 'pay_confirm', 'analytics', 'chat'], accountant: ['pay_view', 'pay_confirm', 'pay_settings', 'costs', 'analytics'], cashier: ['orders', 'pos', 'pay_confirm'], assistant: ['orders', 'orders_edit', 'chat'], inventory: ['stock'], developer: ['design', 'apps', 'domain'] };
 const hasPerm = (role, x) => (PERMS[role] || []).includes(x);
 /* ---------- Strand's own platform team (separate from any shop's staff) ---------- */
 const PLAT_ROLES = { owner: 'Owner', support: 'Support', moderator: 'Moderator' };
@@ -124,7 +124,8 @@ async function custAuth(h) { const t = unsign(String(h.authorization || '').repl
 const custTok = c => sign({ r: 'customer', id: c.id, sv: c.sv | 0, exp: Date.now() + 30 * 864e5 });
 const custAcctKey = id => { const e = emailKey(id); if (e) return 'cu:email:' + e; const p = phoneKey(id); return p ? 'cu:phone:' + p : ''; };
 const planOf = s => { const p = s.plan || 'base'; if (p === 'base') return 'base'; if (s.paidUntil && Date.parse(s.paidUntil) + 3 * 864e5 < Date.now()) return 'base'; return p; };
-const NOTE_PERM = { order: 'orders', lowstock: 'stock', payment: 'pay_view', team: 'security', security: 'security', billing: 'billing' };
+const NOTE_PERM = { order: 'orders', lowstock: 'stock', payment: 'pay_view', team: 'security', security: 'security', billing: 'billing', chat: 'chat' };
+const CHAT_BASE_CAP = 7;
 async function note(s, type, text) { try { const pr = s.notify || {}; if (pr[type] === false) return; const x = (await kvGet('notes:' + s.slug)) || { l: [] }; x.l.unshift({ id: 'n' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex'), at: new Date().toISOString(), type, text: str(text, 160), read: false }); x.l = x.l.slice(0, 100); await kvSet('notes:' + s.slug, x); if (pr.email && s.email && E.RESEND_API_KEY && (type === 'order' || type === 'security')) { fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [s.email], subject: str(text, 70), text: str(text, 300) + '\n\nOpen your store to see more.' }) }).catch(() => {}); } } catch (e) {} }
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i;
 function custWelcomeMail(s, o, email) { try { if (!E.RESEND_API_KEY || !EMAIL_RE.test(email || '')) return; fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [email], subject: 'Welcome to ' + s.name + ', on Strand', text: 'Welcome to ' + s.name + '!\n\nYour order ' + o.no + ' (GH₵ ' + o.total + ') has been sent to the store. They will reach you on ' + (o.phone || 'the number you gave') + '.\n\n' + s.name + ' is powered by Strand. We just handle the store, orders and payments — ' + s.name + ' is their own independent business.'}) }).catch(() => {}); } catch (e) {} }
@@ -356,6 +357,34 @@ const handler = async (event) => {
       if (method === 'momo') out.momo = s.pay.momo; if (method === 'link') out.link = s.pay.link;
       if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'); const viaSub = s.pay.subaccount && E.PAYSTACK_PLATFORM_KEY; const initBody = { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }; if (viaSub) { initBody.subaccount = s.pay.subaccount.code; initBody.bearer = 'subaccount'; if (planOf(s) === 'base') initBody.transaction_charge = Math.round(Math.round(total * 100) * BASIC_FEE_PCT / 100); } const r = await ps(viaSub ? E.PAYSTACK_PLATFORM_KEY : dec(s.pay.paystack.k), '/transaction/initialize', initBody); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Send the order on WhatsApp and pay the store directly.'; }
       return J(200, out);
+    }
+    if (p === '/api/chat/send' && M === 'POST') {
+      if (limited(ip, 'ch', 30, 3600e3)) return J(429, { error: 'Too many messages. Slow down a little.' });
+      if (b.hp) return J(400, { error: 'That did not look right. Try again.' });
+      const s = await kvGet('store:' + str(b.slug, 40)); if (!s) return J(404, { error: "We couldn't find that store." });
+      const cust = await custAuth(h);
+      const custId = cust ? 'c:' + cust.id : (str(b.gid, 40) ? 'g:' + str(b.gid, 40) : '');
+      if (!custId) return J(400, { error: 'Could not identify you. Refresh and try again.' });
+      const custName = cust ? cust.name : (str(b.name, 60) || 'Guest');
+      const text = str(b.text, 500); if (!text) return J(400, { error: 'Write a message first.' });
+      const key = 'chat:' + s.slug + ':' + custId, th = (await kvGet(key)) || { custId, custName, messages: [], custMsgCount: 0 };
+      if (planOf(s) === 'base' && (th.custMsgCount || 0) >= CHAT_BASE_CAP) return J(403, { error: "This store's free chat is limited to " + CHAT_BASE_CAP + ' messages. Wait for them to reply, or ask them to upgrade for unlimited chat.', capped: true });
+      th.custName = custName; if (cust && cust.phone) th.phone = cust.phone;
+      th.messages.push({ from: 'c', text, at: new Date().toISOString() }); th.messages = th.messages.slice(-200);
+      th.custMsgCount = (th.custMsgCount || 0) + 1; th.unreadS = true;
+      await kvSet(key, th);
+      const ix = (await kvGet('chatidx:' + s.slug)) || { l: [] }; ix.l = ix.l.filter(x => x.custId !== custId); ix.l.unshift({ custId, custName, last: text.slice(0, 80), at: th.messages[th.messages.length - 1].at, unread: true }); ix.l = ix.l.slice(0, 300); await kvSet('chatidx:' + s.slug, ix);
+      await note(s, 'chat', custName + ' sent a message: ' + text.slice(0, 60));
+      return J(200, { ok: true, remaining: planOf(s) === 'base' ? Math.max(0, CHAT_BASE_CAP - th.custMsgCount) : null });
+    }
+    if (p === '/api/chat/thread' && M === 'GET') {
+      const q = event.queryStringParameters || {}, s = await kvGet('store:' + str(q.slug, 40)); if (!s) return J(404, { error: 'Not found' });
+      const cust = await custAuth(h);
+      const custId = cust ? 'c:' + cust.id : (str(q.gid, 40) ? 'g:' + str(q.gid, 40) : '');
+      if (!custId) return J(200, { messages: [], cap: planOf(s) === 'base' ? CHAT_BASE_CAP : null, used: 0, chatSettings: s.chat || {} });
+      const th = (await kvGet('chat:' + s.slug + ':' + custId)) || { messages: [], custMsgCount: 0 };
+      if (th.messages.length) { th.unreadC = false; await kvSet('chat:' + s.slug + ':' + custId, th); }
+      return J(200, { messages: th.messages, custName: th.custName || '', cap: planOf(s) === 'base' ? CHAT_BASE_CAP : null, used: th.custMsgCount || 0, chatSettings: s.chat || {} });
     }
     if (M === 'GET' && p === '/api/admin/health') {
       // deliberately checks the key as either a header or a ?key= query param, so it can be opened directly
@@ -705,6 +734,33 @@ const handler = async (event) => {
       if (M === 'GET' && p === '/api/seller/customers') {
         if (!can('orders') || !can('analytics')) return J(403, { error: 'You do not have access to customers.' }); const ord = ((await kvGet('orders:' + s.slug)) || { l: [] }).l.filter(o => o.status !== 'cancelled' && o.phone), m = {};
         for (const o of ord) { const k = phoneKey(o.phone) || o.phone, c = m[k] = m[k] || { name: o.name, phone: o.phone, orders: 0, spent: 0, last: o.at }; c.orders++; c.spent += o.total; if (o.at > c.last) c.last = o.at; } return J(200, { customers: Object.values(m).sort((x, y) => y.spent - x.spent).slice(0, 200) });
+      }
+      if (p === '/api/seller/chats' && M === 'GET') {
+        if (!can('chat')) return J(403, { error: 'You do not have access to chat.' });
+        const ix = (await kvGet('chatidx:' + s.slug)) || { l: [] };
+        return J(200, { chats: ix.l.slice(0, 200), customizable: ['expert', 'business'].includes(planOf(s)), chatSettings: s.chat || {} });
+      }
+      if (p === '/api/seller/chat' && M === 'GET') {
+        if (!can('chat')) return J(403, { error: 'You do not have access to chat.' });
+        const custId = str((event.queryStringParameters || {}).custId, 60); if (!custId) return J(400, { error: 'Missing conversation.' });
+        const key = 'chat:' + s.slug + ':' + custId, th = await kvGet(key); if (!th) return J(404, { error: 'Not found' });
+        if (th.unreadS) { th.unreadS = false; await kvSet(key, th); const ix = (await kvGet('chatidx:' + s.slug)) || { l: [] }; const row = ix.l.find(x => x.custId === custId); if (row) { row.unread = false; await kvSet('chatidx:' + s.slug, ix); } }
+        return J(200, { custId, custName: th.custName || '', phone: th.phone || '', messages: th.messages || [] });
+      }
+      if (p === '/api/seller/chat/reply' && M === 'POST') {
+        if (!can('chat')) return J(403, { error: 'You do not have access to chat.' });
+        const custId = str(b.custId, 60), text = str(b.text, 500); if (!custId || !text) return J(400, { error: 'Write a message first.' });
+        const key = 'chat:' + s.slug + ':' + custId, th = await kvGet(key); if (!th) return J(404, { error: 'Not found' });
+        th.messages.push({ from: 's', text, at: new Date().toISOString() }); th.messages = th.messages.slice(-200); th.unreadC = true;
+        await kvSet(key, th);
+        const ix = (await kvGet('chatidx:' + s.slug)) || { l: [] }; const row = ix.l.find(x => x.custId === custId); if (row) { row.last = text.slice(0, 80); row.at = th.messages[th.messages.length - 1].at; await kvSet('chatidx:' + s.slug, ix); }
+        return J(200, { ok: true });
+      }
+      if (p === '/api/seller/chat/settings' && M === 'POST') {
+        if (!can('settings')) return J(403, { error: 'You cannot change chat settings.' });
+        if (!['expert', 'business'].includes(planOf(s))) return J(403, { error: 'Customizing chat is a Pro and Business feature. Upgrade to customize yours.' });
+        s.chat = { color: /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : (s.chat || {}).color || '', welcome: str(b.welcome, 200) };
+        await kvSet('store:' + s.slug, s); return J(200, { ok: true, chatSettings: s.chat });
       }
       if (p === '/api/seller/notes') {
         const x = (await kvGet('notes:' + s.slug)) || { l: [] };
