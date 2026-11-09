@@ -179,14 +179,16 @@ const SAMPLES = {
   corner: ['Sample Corner', 'Everyday basics', [['Mini Notebook', 12, 'Stationery'], ['Biscuit Pack', 8, 'Snacks'], ['Phone Pouch', 25, 'Accessories'], ['Bottled Water (6)', 20, 'Drinks']], 'Everyday things, close by', '#c2742f', 'base']
 };
 function tile(name, hue) { const c = encodeURIComponent(String(name).charAt(0).toUpperCase()); return 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(' + hue + ',18%,90%)"/><stop offset="1" stop-color="hsl(' + hue + ',22%,78%)"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/><circle cx="200" cy="190" r="86" fill="hsl(' + hue + ',25%,28%)" opacity=".9"/><text x="200" y="222" font-family="Inter,Arial" font-weight="800" font-size="92" text-anchor="middle" fill="#fff">' + String(name).charAt(0).toUpperCase() + '</text></svg>'); }
+let SEEDED_OK = false; // once true in this warm lambda instance, skip the extra round-trip on every request
 async function seed() {
-  if (await kvGet('seeded:v6')) return;
+  if (SEEDED_OK) return;
+  if (await kvGet('seeded:v7')) { SEEDED_OK = true; return; }
   let n = 0;
   for (const th of Object.keys(SAMPLES)) { const [name, area, prods, tag, acc, plan] = SAMPLES[th], slug = th === 'classic' ? 'sample' : 'sample-' + th;
-    await kvSet('store:' + slug, { slug, name, phone: '233200000000', wa: true, type: STYPE[th], listed: true, sample: true, sv: 0, area: 'Accra', about: tag, hours: 'Every day, 10am to 9pm', delivery: 'Delivery within Accra, from GH₵ 15', open: true, accent: acc, theme: th, layout: { n: Object.keys(SAMPLES).indexOf(th) * 3 + 1 }, pal: ({ classic: 'white', noir: 'black', linen: 'cream', fresh: 'sage', tech: 'black', soft: 'blush', spotlight: 'sky', corner: 'sand' })[th], plan: plan || 'pro', announce: 'Free delivery on orders above GH₵ 300', hero: { title: tag, sub: 'Handpicked pieces. Priced for you.', cta: 'Browse now', img: '' }, banner: { title: 'New drops every week', sub: 'Order on WhatsApp in a minute', cta: 'See what is new', img: '' }, social: { instagram: 'yourstore', whatsapp: '233200000000' },
+    await kvSet('store:' + slug, { slug, name, phone: '233200000000', wa: true, type: STYPE[th], listed: true, sample: true, sv: 0, area: 'Accra', about: tag, hours: 'Every day, 10am to 9pm', delivery: 'Delivery within Accra, from GH₵ 15', open: true, accent: acc, theme: th, layout: { n: Object.keys(SAMPLES).indexOf(th) * 3 + 1 }, pal: ({ classic: 'white', noir: 'black', linen: 'cream', fresh: 'sage', tech: 'black', soft: 'blush', spotlight: 'sky', corner: 'sand' })[th], plan: plan || 'pro', announce: 'Free delivery on orders above GH₵ 300', hero: { title: tag, sub: 'Handpicked pieces. Priced for you.', cta: 'Browse now', img: '' }, banner: { title: 'New drops every week', sub: 'Now taking orders online', cta: 'See what is new', img: '' }, social: { instagram: 'yourstore', whatsapp: '233200000000' },
       products: prods.map((p, i) => ({ id: 'p' + i, name: p[0], price: p[1], was: i === 1 ? Math.round(p[1] * 1.25) : 0, desc: 'A sample item. Replace it with your own.', cat: p[2], badge: i === 0 ? 'New' : i === 1 ? 'Sale' : '', stock: i === 2 ? 3 : null, on: true, img: tile(p[0], (i * 47 + 12) % 360) })) }); n++; }
   for (const th of Object.keys(SAMPLES)) await addIdx(th === 'classic' ? 'sample' : 'sample-' + th);
-  await kvSet('seeded:v6', { n });
+  await kvSet('seeded:v7', { n }); SEEDED_OK = true;
 }
 async function auth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'seller') return null; const s = await kvGet('store:' + t.slug); if (!s || s.deleted || (t.sv | 0) !== (s.sv | 0)) return null; const role = t.role || 'owner'; if (role !== 'owner') { const m = (s.staff || []).find(x => x.id === t.sid); if (!m || m.off || (t.uv | 0) !== (m.uv | 0)) return null; s._me = m; } s._role = role; s._sid = t.sid || ''; if (role === 'owner') s._me = null; return s; }
 const tok = (s, role, sid) => sign({ r: 'seller', slug: s.slug, role, sid: sid || '', sv: s.sv | 0, uv: sid ? (((s.staff || []).find(x => x.id === sid) || {}).uv | 0) : 0, exp: Date.now() + (role === 'owner' ? 14 : 7) * 864e5 });
@@ -197,17 +199,25 @@ const ctlGet = async () => (await kvGet('ctl')) || { banner: '', maint: false };
 // Shared aggregation used by both the browser platform dashboard (/api/platform/overview) and the
 // signed external command-center channel (station.js), so the two always show the same numbers.
 async function platformReport(withGmv) {
-  const x = (await kvGet('idx')) || { l: [] }, day = new Date().toISOString().slice(0, 10), c = await ctlGet();
+  const [x, c] = await Promise.all([kvGet('idx'), ctlGet()]); const idx = x || { l: [] }, day = new Date().toISOString().slice(0, 10);
   let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0, suspended = 0, payOnline = 0, payManual = 0; const plans = { base: 0, pro: 0, expert: 0, business: 0 };
   const SDAYS = 14, since14 = Date.now() - (SDAYS - 1) * 864e5, seriesByCur = {}, growthMap = {}, shopStats = [], recent = [];
   if (withGmv) for (let i = 0; i < SDAYS; i++) growthMap[new Date(Date.now() - (SDAYS - 1 - i) * 864e5).toISOString().slice(0, 10)] = 0;
   const since30 = Date.now() - 30 * 864e5;
-  for (const sl of x.l.slice(0, 400)) {
-    const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)] = (plans[planOf(s)] || 0) + 1; if (s.verified) verified++; if (s.open === false) closed++; if (s.suspended) suspended++; if (s.domain && s.domain.status === 'pending') dom++; const createdDay = String(s.createdAt || '').slice(0, 10); if (createdDay === day) newToday++; if (withGmv && createdDay in growthMap) growthMap[createdDay]++;
+  const slugs = idx.l.slice(0, 400);
+  const storeDocs = await Promise.all(slugs.map(sl => kvGet('store:' + sl)));
+  const realStores = [];
+  for (const s of storeDocs) {
+    if (!s) continue; shops++; if (s.sample) continue; real++; realStores.push(s);
+    plans[planOf(s)] = (plans[planOf(s)] || 0) + 1; if (s.verified) verified++; if (s.open === false) closed++; if (s.suspended) suspended++; if (s.domain && s.domain.status === 'pending') dom++;
+    const createdDay = String(s.createdAt || '').slice(0, 10); if (createdDay === day) newToday++; if (withGmv && createdDay in growthMap) growthMap[createdDay]++;
     if (withGmv) { if (payMethods(s).includes('paystack')) payOnline++; else payManual++; }
-    if (withGmv) {
-      const cur = s.currency || 'GHS'; const bucket = seriesByCur[cur] || (seriesByCur[cur] = { today: 0, last30d: 0, allTime: 0, days: {} }); if (!Object.keys(bucket.days).length) for (let i = 0; i < SDAYS; i++) bucket.days[new Date(Date.now() - (SDAYS - 1 - i) * 864e5).toISOString().slice(0, 10)] = 0;
-      const ord = (await kvGet('orders:' + sl)) || { l: [] }; let shopRev = 0, shopN = 0;
+  }
+  if (withGmv && realStores.length) {
+    const orderDocs = await Promise.all(realStores.map(s => kvGet('orders:' + s.slug)));
+    realStores.forEach((s, idx2) => {
+      const ord = orderDocs[idx2] || { l: [] }; const cur = s.currency || 'GHS'; const bucket = seriesByCur[cur] || (seriesByCur[cur] = { today: 0, last30d: 0, allTime: 0, days: {} }); if (!Object.keys(bucket.days).length) for (let i = 0; i < SDAYS; i++) bucket.days[new Date(Date.now() - (SDAYS - 1 - i) * 864e5).toISOString().slice(0, 10)] = 0;
+      let shopRev = 0, shopN = 0;
       for (const o of ord.l) {
         if (o.status === 'cancelled') continue;
         bucket.allTime += o.total; shopRev += o.total; shopN++;
@@ -216,7 +226,7 @@ async function platformReport(withGmv) {
         if (Date.parse(o.at) >= since14) recent.push({ shop: s.name, slug: s.slug, amount: o.total, cur, at: o.at });
       }
       if (shopRev > 0) shopStats.push({ name: s.name, slug: s.slug, revenue: shopRev, cur, orders: shopN, plan: planOf(s) });
-    }
+    });
   }
   const rq = (await kvGet('reqs')) || { l: [] };
   const out = { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, open: real - closed, suspended, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: fbOn() ? 'firestore' : 'memory', images: sbOn() ? 'supabase' : 'inline', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
@@ -382,8 +392,8 @@ const handler = async (event) => {
       const msg = 'New order ' + no + '\n' + items.map(i => i.qty + ' x ' + i.name + ' (GH₵ ' + i.price * i.qty + ')').join('\n') + '\nTotal: GH₵ ' + total + '\nName: ' + o.name + '\nPhone: ' + o.phone + (o.address ? '\nAddress: ' + o.address : '') + (o.note ? '\nNote: ' + o.note : '');
       const out = { ok: true, no, total, sub: o.sub, fee: o.fee, disc: o.disc, code: o.code, pay: method, ships: o.ships, eta: o.eta }; if (s.wa !== false && s.phone) out.wa ='https://wa.me/' + s.phone + '?text=' + encodeURIComponent(msg + '\nPayment: ' + ({ paystack: 'online (card or mobile money)', momo: 'mobile money', link: 'payment link', cod: 'pay on delivery' })[method]); else if (s.phone) out.call = s.phone; out.contact = o.phone;
       if (method === 'momo') out.momo = s.pay.momo; if (method === 'link') out.link = s.pay.link;
-      if (method === 'paystack' && s.currency && s.currency !== 'GHS') { out.payNote = 'Online card payment is not set up for this store\'s currency yet. Send the order on WhatsApp and pay the store directly.'; }
-      else if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'); const viaSub = s.pay.subaccount && E.PAYSTACK_PLATFORM_KEY; const initBody = { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }; if (viaSub) { initBody.subaccount = s.pay.subaccount.code; initBody.bearer = 'subaccount'; if (planOf(s) === 'base') initBody.transaction_charge = Math.round(Math.round(total * 100) * BASIC_FEE_PCT / 100); } const r = await ps(viaSub ? E.PAYSTACK_PLATFORM_KEY : dec(s.pay.paystack.k), '/transaction/initialize', initBody); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Send the order on WhatsApp and pay the store directly.'; }
+      if (method === 'paystack' && s.currency && s.currency !== 'GHS') { out.payNote = 'Online card payment is not set up for this store\'s currency yet. Choose another payment method to finish your order.'; }
+      else if (method === 'paystack') { try { const em = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(b.email || '') ? b.email : (phoneKey(o.phone) + '@customer.pay'); const viaSub = s.pay.subaccount && E.PAYSTACK_PLATFORM_KEY; const initBody = { email: em, amount: Math.round(total * 100), currency: 'GHS', reference: s.slug + '-' + no, callback_url: (h['x-forwarded-proto'] || 'https') + '://' + h.host + '/s/' + s.slug + '?paid=' + no }; if (viaSub) { initBody.subaccount = s.pay.subaccount.code; initBody.bearer = 'subaccount'; if (planOf(s) === 'base') initBody.transaction_charge = Math.round(Math.round(total * 100) * BASIC_FEE_PCT / 100); } const r = await ps(viaSub ? E.PAYSTACK_PLATFORM_KEY : dec(s.pay.paystack.k), '/transaction/initialize', initBody); if (r.j && r.j.status && r.j.data) out.payUrl = r.j.data.authorization_url; } catch (e) {} if (!out.payUrl) out.payNote = 'Online payment is not available right now. Choose another payment method to finish your order.'; }
       return J(200, out);
     }
     if (p === '/api/chat/send' && M === 'POST') {
@@ -587,8 +597,11 @@ const handler = async (event) => {
       if (M === 'GET' && p === '/api/platform/me') return J(200, { name: pm.name, role: pm.role, roleName: PLAT_ROLES[pm.role], perms: PLAT_PERM_ALL.filter(pcan) });
       if (M === 'GET' && p === '/api/platform/overview') { if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' }); return J(200, await platformReport(true)); }
       if (M === 'GET' && p === '/api/platform/shops') {
-        if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' }); const x = (await kvGet('idx')) || { l: [] }; const out = [];
-        for (const sl of x.l) { const st = await kvGet('store:' + sl); if (!st) continue; const o = (await kvGet('orders:' + sl)) || { l: [] }; out.push({ slug: sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', plan: st.plan || 'base', theme: st.theme || 'classic', currency: st.currency || 'GHS', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, comp: !!st.comp, suspended: st.suspended ? { reason: st.suspended.reason || '', at: st.suspended.at } : null, appeal: (st.appeal && st.appeal.status === 'pending') ? { text: st.appeal.text, at: st.appeal.at } : null, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, createdAt: st.createdAt || '' }); }
+        if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' }); const x = (await kvGet('idx')) || { l: [] };
+        const stores = await Promise.all(x.l.map(sl => kvGet('store:' + sl)));
+        const present = x.l.map((sl, i) => ({ sl, st: stores[i] })).filter(r => r.st);
+        const orderDocs = await Promise.all(present.map(r => kvGet('orders:' + r.sl)));
+        const out = present.map((r, i) => { const st = r.st, o = orderDocs[i] || { l: [] }; return { slug: r.sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', plan: st.plan || 'base', theme: st.theme || 'classic', currency: st.currency || 'GHS', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, comp: !!st.comp, suspended: st.suspended ? { reason: st.suspended.reason || '', at: st.suspended.at } : null, appeal: (st.appeal && st.appeal.status === 'pending') ? { text: st.appeal.text, at: st.appeal.at } : null, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, createdAt: st.createdAt || '' }; });
         return J(200, { shops: out });
       }
       if (M === 'POST' && p === '/api/platform/shop') {
@@ -617,7 +630,12 @@ const handler = async (event) => {
         await kvSet('plat:staff', ps5); await secLog('platform', 'Platform team member added: ' + nm2 + ' (' + PLAT_ROLES[b.role] + ')', ip); return J(200, { ok: true });
       }
       if (p === '/api/platform/security') {
-        if (M === 'GET') return J(200, { log: ((await kvGet('sec:platform')) || { l: [] }).l });
+        if (M === 'GET') {
+          const log5 = ((await kvGet('sec:platform')) || { l: [] }).l;
+          const failedLogins = log5.filter(x => /^Wrong platform login attempt/.test(x.what) || /^Account locked/.test(x.what)).slice(0, 10);
+          const alerts = pcan('shops_view') ? ((await kvGet('sys:secalerts')) || { l: [] }).l.slice(0, 20) : [];
+          return J(200, { log: log5, failedLogins, alerts, otpEmail: pm.key.startsWith('email:'), emailOn: !!E.RESEND_API_KEY, seats: { used: (await platStaff()).l.length, max: 25 } });
+        }
         if (limited(ip, 'psc', 10, 900e3)) return J(429, { error: 'Too many tries. Wait a few minutes.' });
         if (b.action === 'logout_all') { pm.uv = (pm.uv | 0) + 1; const ps6 = await platStaff(); const m3 = ps6.l.find(x => x.id === pm.id); if (m3) m3.uv = pm.uv; await kvSet('plat:staff', ps6); await secLog('platform', 'Logged out of all devices (' + pm.name + ')', ip); return J(200, { ok: true, token: platTok(pm) }); }
         if (b.action === 'password') { const old = pinHash(String(b.old || '').slice(0, 64), pm.salt); if (old.length !== pm.pin.length || !crypto.timingSafeEqual(Buffer.from(old), Buffer.from(pm.pin))) return J(400, { error: 'Your current password is not right.' }); const pe3 = passOk(b.next); if (pe3) return J(400, { error: pe3 }); const ps7 = await platStaff(); const m4 = ps7.l.find(x => x.id === pm.id); m4.salt = crypto.randomBytes(16).toString('hex'); m4.pin = pinHash(String(b.next), m4.salt); m4.uv = (m4.uv | 0) + 1; await kvSet('plat:staff', ps7); await secLog('platform', 'Password changed (' + pm.name + ')', ip); return J(200, { ok: true, token: platTok(m4) }); }
