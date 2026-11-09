@@ -62,7 +62,15 @@ async function fs(method, docId, body) {
   const url = 'https://firestore.googleapis.com/v1/projects/' + fbProjectId() + '/databases/(default)/documents/strand_kv/' + encodeURIComponent(docId) + (method === 'PATCH' ? '?updateMask.fieldPaths=value' : '');
   const r = await fetch(url, { method, headers: { Authorization: 'Bearer ' + tok, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (r.status === 404) return null;
-  const t = await r.text(); if (!r.ok) throw new Error('db ' + r.status + ' ' + t.slice(0, 200)); return t ? JSON.parse(t) : null;
+  const t = await r.text();
+  if (!r.ok) {
+    if (/longer than|exceeds the maximum|too large|maximum.{0,20}size/i.test(t)) {
+      const err = new Error('This store has too many photos saved inline to add more right now. Turning on photo storage (Supabase) fixes this for good — see README.txt for the two environment variables to add, SUPABASE_URL and SUPABASE_SERVICE_KEY.');
+      err.friendly = true; throw err;
+    }
+    throw new Error('db ' + r.status + ' ' + t.slice(0, 200));
+  }
+  return t ? JSON.parse(t) : null;
 }
 const kvGet = async k => { if (!fbOn()) return mem.get(k) || null; const r = await fs('GET', k); return (r && r.fields && r.fields.value) ? fromFs(r.fields.value) : null; };
 const kvSet = async (k, v) => {
@@ -970,7 +978,7 @@ const handler = async (event) => {
       }
     }
     return J(404, { error: 'Not found' });
-  } catch (e) { console.error('[strand] ' + M + ' ' + p + ' failed:', e && e.stack || e); return J(500, { error: 'Something went wrong on our side. Please try again.' }); }
+  } catch (e) { console.error('[strand] ' + M + ' ' + p + ' failed:', e && e.stack || e); return J(500, { error: (e && e.friendly) ? e.message : 'Something went wrong on our side. Please try again.' }); }
 };
 
 module.exports = async (req, res) => {
