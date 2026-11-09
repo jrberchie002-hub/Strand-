@@ -169,7 +169,38 @@ table.mx{border-collapse:collapse;width:100%;font-size:13px}table.mx th,table.mx
  .wrap.land .btn{max-width:none} .land .lsec{padding:32px 36px}
  .wrap.expl{max-width:900px}
  .sheet{max-width:560px;border-radius:24px;margin-bottom:6vh}.ov{align-items:center}
+ .pctl.shell{background:#0b0b0c}.pctl .side{background:#111113;border-right-color:#232327}.pctl .card{background:#fff;border:1px solid var(--line)}.pctl .kpi{background:#fff;border:1px solid var(--line)}
 }
+/* platform control station: black theme */
+.pctl{background:#0b0b0c;color:#f2f2f4}
+.pctl .side{background:#111113;border-right-color:#232327}
+.pctl .sn{border-bottom-color:#232327}.pctl .sn b{color:#f2f2f4}
+.pctl .ng{color:#6f6f78}
+.pctl .ni{color:#cfcfd6}.pctl .ni:hover{background:#1c1c20}.pctl .ni.on{background:#d4001a;color:#fff}
+.pctl .su{border-top-color:#232327;color:#f2f2f4}
+.pctl .mhead,.pctl .mlogo{background:#0b0b0c}
+.pctl .crumb .mu{color:#7a7a84}.pctl .crumb b{color:#f2f2f4}
+.pctl .bell{color:#f2f2f4}
+.pctl h2.dh{color:#f2f2f4}
+.pctl .mu{color:#8f8f98}
+.pctl .card,.pctl .kpi,.pctl .stile,.pctl .panel,.pctl .tbl{background:#17171a;border-color:#232327!important;color:#f2f2f4}
+.pctl .card.note{background:#271414;border-color:#4a2024!important}
+.pctl .kpi span{color:#8f8f98}
+.pctl .panel .sub{color:#8f8f98}
+.pctl .th{background:#1c1c20;color:#8f8f98}
+.pctl .tr{border-top-color:#232327}
+.pctl input,.pctl select,.pctl textarea{background:#1c1c20;border-color:#2b2b30;color:#f2f2f4}
+.pctl input::placeholder{color:#6f6f78}
+.pctl label{color:#cfcfd6}
+.pctl .btn.o{background:#17171a;color:#f2f2f4;border-color:#2b2b30}
+.pctl .btn.k{background:#f2f2f4;color:#0b0b0c}
+.pctl .pill{background:#2a2a2e;color:#f2f2f4}
+.pctl .pill.live{background:#102a1c;color:#4ade80}.pctl .pill.closed{background:#232327;color:#9a9aa3}
+.pctl .pill.susp,.pctl .pill.off{background:#361316;color:#f87171}.pctl .pill.comp{background:#1b2040;color:#a5b4fc}
+.pctl .feedrow .fi{background:#102a1c;color:#4ade80}.pctl .feedrow .fi.warn{background:#361316;color:#f87171}
+.pctl a{color:#f2f2f4}
+.pctl .err{color:#f87171}
+.pctl .mm path[stroke="#0a0a0a"]{stroke:#fff}
 @media(min-width:900px){.content h2.dh{display:none}.th,.tr{grid-template-columns:1fr 1.3fr 1fr .9fr 1.4fr 110px}.th.c5,.tr.c5{grid-template-columns:1.2fr 1fr .9fr .8fr 330px}.tr .r{flex-wrap:nowrap}.th.c3,.tr.c3{grid-template-columns:.6fr .6fr 2fr}.th.c4,.tr.c4{grid-template-columns:1.6fr .7fr 1fr 1fr}}
 @media(min-width:900px){.content>h2:first-child{display:none}}
 /* layout engine */
@@ -698,7 +729,8 @@ function pgo(t){ptab=t;platDraw();window.scrollTo(0,0)}
 function platDraw(){
  var views={overview:platOverviewV,shops:platShopsV,requests:platReqV,team:platTeamV,security:platSecV};
  var side='<div class="side"><div class="sl">'+logo()+'</div><div class="sn"><b>'+esc(PM.name)+'</b><div class="mu">'+esc(PM.roleName)+'</div></div><nav>'+PNAV.map(function(n){return'<button class="ni'+(ptab===n[0]?' on':'')+'" onclick="pgo(\''+n[0]+'\')">'+n[1]+'</button>'}).join('')+'</nav><button class="btn o" style="margin-top:10px" onclick="platLogout()">Log out</button></div>';
- $('app').innerHTML='<div class="shell">'+side+'<div class="main"><div class="mlogo">'+logo()+'</div><div class="content"><h2 class="dh">'+(PNAV.filter(function(n){return n[0]===ptab})[0]||['',''])[1]+'</h2><div id="pbody">Loading…</div></div></div></div>';
+ document.body.style.background='#0b0b0c';
+ $('app').innerHTML='<div class="shell pctl">'+side+'<div class="main"><div class="mlogo">'+logo()+'</div><div class="content"><h2 class="dh">'+(PNAV.filter(function(n){return n[0]===ptab})[0]||['',''])[1]+'</h2><div id="pbody">Loading…</div></div></div></div>';
  views[ptab]();
 }
 function plColor(k){return{base:'#8a8a92',pro:'#d4001a',expert:'#2563eb',business:'#111'}[k]||'#8a8a92'}
