@@ -192,15 +192,32 @@ const ctlGet = async () => (await kvGet('ctl')) || { banner: '', maint: false };
 // signed external command-center channel (station.js), so the two always show the same numbers.
 async function platformReport(withGmv) {
   const x = (await kvGet('idx')) || { l: [] }, day = new Date().toISOString().slice(0, 10), c = await ctlGet();
-  let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0; const plans = { base: 0, pro: 0, expert: 0 };
+  let shops = 0, real = 0, verified = 0, closed = 0, dom = 0, newToday = 0; const plans = { base: 0, pro: 0, expert: 0, business: 0 };
   let gmvToday = 0, gmv30d = 0, gmvAll = 0, since30 = Date.now() - 30 * 864e5;
+  const SDAYS = 14, since14 = Date.now() - (SDAYS - 1) * 864e5, seriesMap = {}, shopStats = [], recent = [];
+  if (withGmv) for (let i = 0; i < SDAYS; i++) seriesMap[new Date(Date.now() - (SDAYS - 1 - i) * 864e5).toISOString().slice(0, 10)] = 0;
   for (const sl of x.l.slice(0, 400)) {
-    const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)]++; if (s.verified) verified++; if (s.open === false) closed++; if (s.domain && s.domain.status === 'pending') dom++; if (String(s.createdAt || '').slice(0, 10) === day) newToday++;
-    if (withGmv) { const ord = (await kvGet('orders:' + sl)) || { l: [] }; for (const o of ord.l) { if (o.status === 'cancelled') continue; gmvAll += o.total; if (Date.parse(o.at) >= since30) gmv30d += o.total; if (o.at.slice(0, 10) === day) gmvToday += o.total; } }
+    const s = await kvGet('store:' + sl); if (!s) continue; shops++; if (s.sample) continue; real++; plans[planOf(s)] = (plans[planOf(s)] || 0) + 1; if (s.verified) verified++; if (s.open === false) closed++; if (s.domain && s.domain.status === 'pending') dom++; if (String(s.createdAt || '').slice(0, 10) === day) newToday++;
+    if (withGmv) {
+      const ord = (await kvGet('orders:' + sl)) || { l: [] }; let shopRev = 0, shopN = 0;
+      for (const o of ord.l) {
+        if (o.status === 'cancelled') continue;
+        gmvAll += o.total; shopRev += o.total; shopN++;
+        if (Date.parse(o.at) >= since30) gmv30d += o.total;
+        const dk = String(o.at || '').slice(0, 10); if (dk === day) gmvToday += o.total; if (dk in seriesMap) seriesMap[dk] += o.total;
+        if (Date.parse(o.at) >= since14) recent.push({ shop: s.name, slug: s.slug, amount: o.total, at: o.at });
+      }
+      if (shopRev > 0) shopStats.push({ name: s.name, slug: s.slug, revenue: shopRev, orders: shopN, plan: planOf(s) });
+    }
   }
   const rq = (await kvGet('reqs')) || { l: [] };
   const out = { at: new Date().toISOString(), name: 'Strand', kind: 'platform', version: 'strand-1', shops: { total: real, newToday, verified, closed, plans }, waiting: { domains: dom, requests: (rq.l || []).filter(r => !r.done).length }, control: { banner: c.banner || '', maintenance: !!c.maint }, health: { store: fbOn() ? 'firestore' : 'memory', images: sbOn() ? 'supabase' : 'inline', paystack: !!E.PAYSTACK_PLATFORM_KEY, email: !!E.RESEND_API_KEY } };
-  if (withGmv) out.gmv = { today: Math.round(gmvToday * 100) / 100, last30d: Math.round(gmv30d * 100) / 100, allTime: Math.round(gmvAll * 100) / 100 };
+  if (withGmv) {
+    out.gmv = { today: Math.round(gmvToday * 100) / 100, last30d: Math.round(gmv30d * 100) / 100, allTime: Math.round(gmvAll * 100) / 100 };
+    out.series = Object.keys(seriesMap).sort().map(d => ({ d, v: Math.round(seriesMap[d] * 100) / 100 }));
+    out.topShops = shopStats.sort((a, b) => b.revenue - a.revenue).slice(0, 6);
+    out.recent = recent.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 8);
+  }
   return out;
 }
 const STN = require('../station')({

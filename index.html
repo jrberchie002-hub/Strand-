@@ -110,6 +110,40 @@ h2.dh{display:block}.content .back{display:inline-block}
 .plans3 .card .seat{display:flex;align-items:center;gap:5px;font:600 12px Inter;color:#6b6b72;margin:2px 0 10px}
 table.mx{border-collapse:collapse;width:100%;font-size:13px}table.mx th,table.mx td{padding:8px 6px;text-align:center;border-top:1px solid var(--line)}table.mx th{font-size:11px;color:#666;font-weight:600}table.mx td:first-child,table.mx th:first-child{text-align:left;min-width:150px}
 .lhero{display:block}
+.stiles{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:10px 0}
+.stile{background:#fff;border:1px solid var(--line);border-radius:18px;padding:16px}
+.stile .ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;font-size:18px;margin-bottom:12px}
+.stile span{display:block;font:600 12.5px Inter;color:var(--mu);text-transform:uppercase;letter-spacing:.3px}
+.stile b{display:block;font:700 25px Inter;margin-top:3px;letter-spacing:-.02em}
+.ov2{display:grid;grid-template-columns:1fr;gap:14px;margin-top:14px}
+.panel{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px}
+.panel h3{margin:0 0 2px;font-size:15px}
+.panel .sub{margin:0 0 14px;font:400 12.5px Inter;color:var(--mu)}
+.chartbox{display:flex;align-items:flex-end;gap:5px;height:130px}
+.chartbox .cb{flex:1;background:linear-gradient(180deg,#ff8a3d,var(--red,#d4001a));border-radius:5px 5px 2px 2px;min-height:4px}
+.chartlabels{display:flex;gap:5px;margin-top:6px}
+.chartlabels span{flex:1;text-align:center;font:600 10.5px Inter;color:var(--mu)}
+.planrow{display:flex;align-items:center;gap:10px;padding:8px 0}
+.planrow .pdot{width:10px;height:10px;border-radius:3px;flex:none}
+.planrow .nm{width:64px;font:600 13px Inter;flex:none}
+.planrow .track{flex:1;height:8px;background:#f0f0f1;border-radius:99px;overflow:hidden}
+.planrow .fill{height:100%;border-radius:99px}
+.planrow .ct{width:24px;text-align:right;font:700 13px Inter;flex:none}
+.toplist,.feed{display:flex;flex-direction:column}
+.toprow,.feedrow,.healthrow{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--line)}
+.toprow:first-child,.feedrow:first-child,.healthrow:first-child{border-top:0}
+.toprow .rk{width:26px;height:26px;border-radius:50%;background:#f5f5f6;display:grid;place-items:center;font:700 12px Inter;flex:none;color:#666}
+.toprow .nm2{flex:1;min-width:0}
+.toprow .nm2 b{display:block;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toprow .nm2 span{font:400 12px Inter;color:var(--mu)}
+.toprow .rev{font:700 14px Inter;flex:none}
+.feedrow .fi{width:30px;height:30px;border-radius:50%;background:#eafaf0;color:#16a34a;display:grid;place-items:center;font-size:13px;flex:none}
+.feedrow .ft1{flex:1;min-width:0;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feedrow .fat{font:400 11.5px Inter;color:var(--mu);flex:none}
+.healthrow .hdot{width:9px;height:9px;border-radius:50%;flex:none}
+.healthrow .hdot.ok{background:#16a34a}.healthrow .hdot.off{background:#d4d4d8}
+.healthrow .hnm{flex:1;font-size:13.5px;color:var(--mu)}
+.healthrow b{font-size:13.5px;font-weight:700}
 @media(max-width:899px){.tbl .th{display:none}.tr,.tr.c3,.tr.c4,.tr.c5{grid-template-columns:1fr 1fr;gap:6px 12px}.tr .r{justify-content:flex-start}}
 @media(min-width:900px){
  .shell{display:grid;grid-template-columns:264px 1fr;min-height:100vh;background:#f6f6f7}
@@ -122,6 +156,7 @@ table.mx{border-collapse:collapse;width:100%;font-size:13px}table.mx th,table.mx
  .main{max-width:none;margin:0;padding:0 36px 60px}.mlogo{display:none}.mhead{position:sticky;top:0;background:#f6f6f7;z-index:10;padding:14px 0 6px}.topb2{padding:0}.crumb{display:block}.crumb b{display:block;font-size:22px}.vw{display:inline-flex}.bell{margin-left:0}
  .content{max-width:1040px}.content .back{display:none}h2.dh{font-size:26px;margin:6px 0 4px}.tabs{display:none}
  .kpis{grid-template-columns:repeat(4,1fr)}.kpis.k3{grid-template-columns:repeat(3,1fr)}.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}.plans3{grid-template-columns:repeat(3,1fr)}
+ .stiles{grid-template-columns:repeat(6,1fr)}.ov2{grid-template-columns:1.3fr 1fr}
  .card{background:#fff;border:1px solid var(--line)}.kpi{background:#fff;border:1px solid var(--line)}
  .btn{max-width:420px}.tr .btn,.th .btn,.row .btn{max-width:none}
  .sf{max-width:1180px}.sf .grid{grid-template-columns:repeat(4,1fr);gap:18px;padding:0 28px}.sf .hero{min-height:440px;padding:80px 64px}.sf .hero h1{font-size:60px;max-width:700px}.sf .hero p{font-size:19px;max-width:560px}.sf .top{padding:16px 28px}.sf .sec{padding:0 28px}.sf .trust{padding:16px 28px}.sf .promo{margin:24px 28px}.sf .ft{padding:36px 28px}
@@ -653,12 +688,27 @@ function platDraw(){
  $('app').innerHTML='<div class="shell">'+side+'<div class="main"><div class="mlogo">'+logo()+'</div><div class="content"><h2 class="dh">'+(PNAV.filter(function(n){return n[0]===ptab})[0]||['',''])[1]+'</h2><div id="pbody">Loading…</div></div></div></div>';
  views[ptab]();
 }
-function platOverviewV(){papi('GET','/api/platform/overview').then(function(r){PD=r;var g=r.gmv||{today:0,last30d:0,allTime:0};
- $('pbody').innerHTML='<div class="kpis"><div class="kpi"><span>Stores</span><b>'+r.shops.total+'</b></div><div class="kpi"><span>New today</span><b>'+r.shops.newToday+'</b></div><div class="kpi"><span>Verified</span><b>'+r.shops.verified+'</b></div><div class="kpi"><span>Closed</span><b>'+r.shops.closed+'</b></div></div>'+
- '<div class="card"><h3>GMV (all stores)</h3><div class="kpis k3"><div class="kpi"><span>Today</span><b>'+money(g.today)+'</b></div><div class="kpi"><span>Last 30 days</span><b>'+money(g.last30d)+'</b></div><div class="kpi"><span>All time</span><b>'+money(g.allTime)+'</b></div></div></div>'+
- '<div class="card"><h3>Plans</h3><div class="row"><span class="mu">Base</span><div class="sp"></div><b>'+r.shops.plans.base+'</b></div><div class="row"><span class="mu">Plus</span><div class="sp"></div><b>'+r.shops.plans.pro+'</b></div><div class="row"><span class="mu">Pro</span><div class="sp"></div><b>'+r.shops.plans.expert+'</b></div></div>'+
- '<div class="card"><h3>Waiting on you</h3><div class="row"><span class="mu">Open requests</span><div class="sp"></div><b>'+r.waiting.requests+'</b></div><div class="row"><span class="mu">Domains pending</span><div class="sp"></div><b>'+r.waiting.domains+'</b></div></div>'+
- '<div class="card"><h3>System health</h3><div class="row"><span class="mu">Storage</span><div class="sp"></div><b>'+esc(r.health.store)+'</b></div><div class="row"><span class="mu">Images</span><div class="sp"></div><b>'+esc(r.health.images)+'</b></div><div class="row"><span class="mu">Paystack</span><div class="sp"></div><b>'+(r.health.paystack?'Connected':'Not connected')+'</b></div><div class="row"><span class="mu">Email</span><div class="sp"></div><b>'+(r.health.email?'Connected':'Not connected')+'</b></div></div>';
+function plColor(k){return{base:'#8a8a92',pro:'#d4001a',expert:'#2563eb',business:'#111'}[k]||'#8a8a92'}
+function timeAgo(iso){var s=Math.max(0,(Date.now()-Date.parse(iso))/1000);if(s<60)return'just now';if(s<3600)return Math.floor(s/60)+'m ago';if(s<86400)return Math.floor(s/3600)+'h ago';return Math.floor(s/86400)+'d ago'}
+function platOverviewV(){papi('GET','/api/platform/overview').then(function(r){PD=r;var g=r.gmv||{today:0,last30d:0,allTime:0},sh=r.shops,plans=sh.plans||{},series=r.series||[],top=r.topShops||[],recent=r.recent||[];
+ var stiles=[['🏬','Stores',sh.total,'#d4001a'],['✨','New today',sh.newToday,'#2563eb'],['✔️','Verified',sh.verified,'#16a34a'],['💵','GMV today',money(g.today),'#d97706'],['📈','GMV · 30 days',money(g.last30d),'#7c3aed'],['📥','Requests',r.waiting.requests,'#111']];
+ var planRows=[['base','Basic',plans.base||0],['pro','Plus',plans.pro||0],['expert','Pro',plans.expert||0],['business','Business',plans.business||0]];
+ var planMax=Math.max.apply(null,planRows.map(function(x){return x[2]}).concat([1]));
+ var maxV=Math.max.apply(null,series.map(function(x){return x.v}).concat([1]));
+ $('pbody').innerHTML=
+  '<div class="stiles">'+stiles.map(function(x){return'<div class="stile"><div class="ic" style="background:'+x[3]+'1a;color:'+x[3]+'">'+x[0]+'</div><span>'+x[1]+'</span><b>'+x[2]+'</b></div>'}).join('')+'</div>'+
+  '<div class="ov2">'+
+   '<div class="panel"><h3>Sales overview</h3><p class="sub">GMV across all stores &middot; last 14 days</p><div class="chartbox">'+series.map(function(x){return'<div class="cb" style="height:'+(Math.round(x.v/maxV*118)+4)+'px" title="'+x.d+' &middot; '+money(x.v)+'"></div>'}).join('')+'</div><div class="chartlabels">'+series.map(function(x){return'<span>'+new Date(x.d+'T00:00:00').toLocaleDateString(undefined,{weekday:'narrow'})+'</span>'}).join('')+'</div></div>'+
+   '<div class="panel"><h3>Plans</h3><p class="sub">Stores on each tier</p>'+planRows.map(function(x){return'<div class="planrow"><i class="pdot" style="background:'+plColor(x[0])+'"></i><span class="nm">'+x[1]+'</span><div class="track"><div class="fill" style="width:'+Math.round(x[2]/planMax*100)+'%;background:'+plColor(x[0])+'"></div></div><span class="ct">'+x[2]+'</span></div>'}).join('')+'</div>'+
+  '</div>'+
+  '<div class="ov2">'+
+   '<div class="panel"><h3>Top stores</h3><p class="sub">By revenue, all time</p><div class="toplist">'+(top.length?top.map(function(x,i){return'<div class="toprow"><span class="rk">'+(i+1)+'</span><div class="nm2"><b>'+esc(x.name)+'</b><span>'+x.orders+' orders</span></div><span class="rev">'+money(x.revenue)+'</span></div>'}).join(''):'<p class="mu" style="margin:0">No sales yet.</p>')+'</div></div>'+
+   '<div class="panel"><h3>Recent activity</h3><p class="sub">Latest orders across all stores</p><div class="feed">'+(recent.length?recent.map(function(x){return'<div class="feedrow"><div class="fi">&#10003;</div><div class="ft1"><b>'+esc(x.shop)+'</b> &middot; new order &middot; '+money(x.amount)+'</div><span class="fat">'+timeAgo(x.at)+'</span></div>'}).join(''):'<p class="mu" style="margin:0">Nothing yet.</p>')+'</div></div>'+
+  '</div>'+
+  '<div class="ov2">'+
+   '<div class="panel"><h3>Waiting on you</h3><p class="sub">Needs a decision from the team</p><div class="healthrow"><span class="hnm">Open requests</span><b>'+r.waiting.requests+'</b></div><div class="healthrow"><span class="hnm">Domains pending</span><b>'+r.waiting.domains+'</b></div></div>'+
+   '<div class="panel"><h3>System health</h3><p class="sub">Live status of connected services</p><div class="healthrow"><i class="hdot ok"></i><span class="hnm">Storage</span><b>'+esc(r.health.store)+'</b></div><div class="healthrow"><i class="hdot ok"></i><span class="hnm">Images</span><b>'+esc(r.health.images)+'</b></div><div class="healthrow"><i class="hdot '+(r.health.paystack?'ok':'off')+'"></i><span class="hnm">Paystack</span><b>'+(r.health.paystack?'Connected':'Not connected')+'</b></div><div class="healthrow"><i class="hdot '+(r.health.email?'ok':'off')+'"></i><span class="hnm">Email</span><b>'+(r.health.email?'Connected':'Not connected')+'</b></div></div>'+
+  '</div>';
 }).catch(function(e){$('pbody').innerHTML='<p class="err">'+esc(e.message)+'</p>'})}
 function platShopsV(){papi('GET','/api/platform/shops').then(function(r){PS=r.shops;
  $('pbody').innerHTML=PS.map(function(s){return'<div class="card"><div class="row"><b>'+esc(s.name)+'</b><div class="sp"></div><a href="/s/'+s.slug+'" target="_blank">open</a></div><div class="mu">'+esc(s.type)+' · '+esc(s.phone||s.email)+' · '+s.orders+' orders · '+money(s.revenue)+'</div><div class="row" style="margin-top:8px;flex-wrap:wrap;gap:10px"><label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:600"><input type="checkbox" style="width:20px;height:20px" '+(s.verified?'checked':'')+' onchange="platShopSet(\''+s.slug+'\',{verified:this.checked})">Verified</label><label style="display:flex;align-items:center;gap:8px;margin:0;font-weight:600"><input type="checkbox" style="width:20px;height:20px" '+(s.open?'checked':'')+' onchange="platShopSet(\''+s.slug+'\',{open:this.checked})">Open</label><select onchange="platShopSet(\''+s.slug+'\',{plan:this.value})">'+['base','pro','expert','business'].map(function(x){return'<option '+(s.plan===x?'selected':'')+'>'+x+'</option>'}).join('')+'</select></div></div>'}).join('');
