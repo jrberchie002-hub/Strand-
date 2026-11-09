@@ -609,7 +609,31 @@ const handler = async (event) => {
         if (PLANS.includes(b.plan)) st.plan = b.plan; if (typeof b.verified === 'boolean') st.verified = b.verified; if (typeof b.open === 'boolean') st.open = b.open; if (b.paidUntil !== undefined) st.paidUntil = /^\d{4}-\d{2}-\d{2}/.test(b.paidUntil) ? new Date(b.paidUntil).toISOString() : ''; if (typeof b.comp === 'boolean') st.comp = b.comp;
         if (b.suspend !== undefined) { const reason = str(b.suspend, 300); if (reason) { st.suspended = { reason, at: new Date().toISOString(), by: pm.name }; await secLog('platform', 'Suspended ' + st.slug + ': ' + reason + ' (' + pm.name + ')', ip); } }
         if (b.unsuspend) { st.suspended = null; if (st.appeal) st.appeal.status = 'resolved'; await secLog('platform', 'Lifted suspension on ' + st.slug + ' (' + pm.name + ')', ip); }
-        await kvSet('store:' + st.slug, st); await secLog('platform', 'Changed store ' + st.slug + ' (' + pm.name + ')', ip); return J(200, { ok: true });
+        let assignedPin = '';
+        if (b.assign && typeof b.assign === 'object') {
+          const a = b.assign, ph2 = phoneKey(a.phone), em2 = emailKey(a.email);
+          if (!ph2 && !em2) return J(400, { error: 'Add a phone number or email for the new owner.' });
+          const pin3 = String(a.pin || ''); const pe4 = passOk(pin3); if (pe4) return J(400, { error: pe4 });
+          if ((ph2 && ph2 !== st.phone && await kvGet('phone:' + ph2)) || (em2 && em2 !== st.email && await kvGet('email:' + em2))) return J(409, { error: 'Those contact details are already used by another account.' });
+          if (st.phone && ph2 && st.phone !== ph2) await kvSet('phone:' + st.phone, null);
+          if (st.email && em2 && st.email !== em2) await kvSet('email:' + st.email, null);
+          const saltA = crypto.randomBytes(16).toString('hex');
+          if (ph2) st.phone = ph2; if (em2) st.email = em2;
+          st.salt = saltA; st.pin = pinHash(pin3, saltA); st.sv = (st.sv | 0) + 1; st.sample = false;
+          if (ph2) await kvSet('phone:' + ph2, { slug: st.slug }); if (em2) await kvSet('email:' + em2, { slug: st.slug });
+          assignedPin = pin3;
+          await secLog('platform', 'Assigned store ' + st.slug + ' to a new owner (' + pm.name + ')', ip);
+          await secLog(st.slug, 'Ownership handed over by platform admin (' + pm.name + ')', ip);
+        }
+        await kvSet('store:' + st.slug, st); await secLog('platform', 'Changed store ' + st.slug + ' (' + pm.name + ')', ip);
+        return J(200, assignedPin ? { ok: true, credentials: { phone: st.phone || '', email: st.email || '', pin: assignedPin } } : { ok: true });
+      }
+      if (M === 'POST' && p === '/api/platform/impersonate') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to edit stores.' });
+        const st9 = await kvGet('store:' + str(b.slug, 40)); if (!st9) return J(404, { error: 'No such shop' });
+        await secLog('platform', 'Opened the editor for ' + st9.slug + ' (' + pm.name + ')', ip);
+        await secLog(st9.slug, 'Opened by a platform admin (' + pm.name + ')', ip);
+        return J(200, { token: tok(st9, 'owner'), slug: st9.slug });
       }
       if (M === 'GET' && p === '/api/platform/requests') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l }); }
       if (M === 'POST' && p === '/api/platform/request') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
