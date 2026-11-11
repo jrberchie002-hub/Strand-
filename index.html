@@ -159,8 +159,13 @@ table.mx{border-collapse:collapse;width:100%;font-size:11.5px}table.mx th,table.
 .pill.live{background:#eafaf0;color:#16a34a}.pill.closed{background:#f1f1f3;color:#777}.pill.susp{background:#fdeaea;color:#d4001a}.pill.comp{background:#eef2ff;color:#4338ca}
 @media(max-width:899px){.tbl .th{display:none}.tr,.tr.c3,.tr.c4,.tr.c5{grid-template-columns:1fr 1fr;gap:6px 12px}.tr .r{justify-content:flex-start}}
 @media(min-width:900px){
- .shell{display:grid;grid-template-columns:264px 1fr;min-height:100vh;background:#f6f6f7}
+ .shell{display:grid;grid-template-columns:224px 1fr;min-height:100vh;background:#f6f6f7;transition:grid-template-columns .15s ease}.shell.cside{grid-template-columns:60px 1fr}
  .side{display:flex;flex-direction:column;position:sticky;top:0;height:100vh;background:#fff;border-right:1px solid var(--line);padding:18px 14px;overflow:auto}
+ .stog{position:absolute;top:14px;right:-13px;width:26px;height:26px;border-radius:50%;background:#fff;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;line-height:1;z-index:2;padding:0;color:var(--ink)}
+ .side.cmini{align-items:center;padding:18px 8px;gap:4px}
+ .nimini{width:36px;height:36px;flex:none;border-radius:10px;border:0;background:none;font:700 14px Inter;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-top:4px}
+ .pctl .nimini{color:#cfcfd6}.pctl .nimini:hover{background:#1c1c20}.pctl .nimini.on{background:#d4001a;color:#fff}
+ .pctl .stog{background:#1c1c20;border-color:#2a2a2f;color:#f2f2f4}
  .side .sl .logo{padding:8px 0 4px}.side .sl .logo .mm{height:30px}.side .sl .logo .wm{height:22px}
  .sn{text-align:center;padding:8px 0 14px;border-bottom:1px solid var(--line);margin-bottom:6px}
  .ng{font:700 11px Inter;letter-spacing:.8px;text-transform:uppercase;color:#8a8a92;margin:16px 10px 4px}
@@ -750,11 +755,17 @@ function platOtp(chal){api('POST','/api/platform/login/verify',{challenge:chal,c
 function platLogout(){try{localStorage.removeItem('bs_pt')}catch(e){}location.href='/'}
 var PNAV=[['overview','Overview'],['shops','Stores'],['invites','Invites'],['requests','Requests'],['team','Team'],['security','Security']];
 function pgo(t){ptab=t;platDraw();window.scrollTo(0,0)}
+function sideCol(){var c=false;try{c=localStorage.getItem('sidecol')==='1'}catch(e){}return c}
+function sideToggle(){try{localStorage.setItem('sidecol',sideCol()?'0':'1')}catch(e){}platDraw()}
 function platDraw(){
  var views={overview:platOverviewV,shops:platShopsV,invites:platInviteV,requests:platReqV,team:platTeamV,security:platSecV};
- var side='<div class="side"><div class="sl">'+logo()+'</div><div class="sn"><b>'+esc(PM.name)+'</b><div class="mu">'+esc(PM.roleName)+'</div></div><nav>'+PNAV.map(function(n){return'<button class="ni'+(ptab===n[0]?' on':'')+'" onclick="pgo(\''+n[0]+'\')">'+n[1]+'</button>'}).join('')+'</nav><button class="btn o" style="margin-top:10px" onclick="platLogout()">Log out</button></div>';
+ var collapsed=sideCol();
+ var tog='<button class="stog" onclick="sideToggle()" aria-label="'+(collapsed?'Expand menu':'Collapse menu')+'" title="'+(collapsed?'Expand menu':'Collapse menu')+'">'+(collapsed?'&raquo;':'&laquo;')+'</button>';
+ var side=collapsed
+  ?'<div class="side cmini">'+tog+PNAV.map(function(n){return'<button class="nimini'+(ptab===n[0]?' on':'')+'" title="'+n[1]+'" onclick="pgo(\''+n[0]+'\')">'+n[1].charAt(0)+'</button>'}).join('')+'<button class="nimini" title="Log out" onclick="platLogout()">'+ico('lock',16)+'</button></div>'
+  :'<div class="side">'+tog+'<div class="sl">'+logo()+'</div><div class="sn"><b>'+esc(PM.name)+'</b><div class="mu">'+esc(PM.roleName)+'</div></div><nav>'+PNAV.map(function(n){return'<button class="ni'+(ptab===n[0]?' on':'')+'" onclick="pgo(\''+n[0]+'\')">'+n[1]+'</button>'}).join('')+'</nav><button class="btn o" style="margin-top:10px" onclick="platLogout()">Log out</button></div>';
  document.body.style.background='#0b0b0c';
- $('app').innerHTML='<div class="shell pctl">'+side+'<div class="main"><div class="mlogo">'+logo()+'</div><div class="content"><h2 class="dh">'+(PNAV.filter(function(n){return n[0]===ptab})[0]||['',''])[1]+'</h2><div id="pbody">'+loaderHtml()+'</div></div></div></div>';
+ $('app').innerHTML='<div class="shell pctl'+(collapsed?' cside':'')+'">'+side+'<div class="main"><div class="mlogo">'+logo()+'</div><div class="content"><h2 class="dh">'+(PNAV.filter(function(n){return n[0]===ptab})[0]||['',''])[1]+'</h2><div id="pbody">'+loaderHtml()+'</div></div></div></div>';
  views[ptab]();
 }
 function plColor(k){return{base:'#8a8a92',pro:'#d4001a',expert:'#2563eb',business:'#111'}[k]||'#8a8a92'}
