@@ -112,7 +112,7 @@ async function pimgSet(slug, pid, imgs) { await kvSet(pimgKey(slug, pid), (imgs 
 async function withProductImgs(s) {
   const prods = s.products || []; if (!prods.length) return s;
   const imgsArr = await Promise.all(prods.map(pr => pimgGet(s.slug, pr.id)));
-  prods.forEach((pr, i) => { const imgs = imgsArr[i]; pr.imgs = imgs; pr.img = imgs[0] || ''; });
+  prods.forEach((pr, i) => { const imgs = imgsArr[i]; if (imgs.length) { pr.imgs = imgs; pr.img = imgs[0] || ''; } else if (pr.img && !(pr.imgs && pr.imgs.length)) { pr.imgs = [pr.img]; } });
   return s;
 }
 /* ---------- helpers ---------- */
