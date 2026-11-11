@@ -149,6 +149,45 @@ async function sbUpload(dataUri, kind) {
   if (bOn) return await sbUploadTo(b, buf, mime, ext, kind);
   throw new Error('No image storage account is configured.');
 }
+/* ---------- private file storage: for anything that should NOT be publicly viewable ----------
+   Unlike the "strand-images" bucket (public, for product/banner photos that need a plain shareable
+   link), this is a PRIVATE bucket - nothing in it has a public URL. Only this backend, using the
+   service_role key, can read, write or generate a short-lived signed link to a file in it. Reuses
+   account 1's Supabase project/credentials by default (SUPABASE_URL/SUPABASE_SERVICE_KEY) unless a
+   separate SUPABASE_PRIVATE_URL/SUPABASE_PRIVATE_KEY pair is set. Bucket name defaults to
+   "strand-private" (override with SUPABASE_PRIVATE_BUCKET) - create it in Supabase's Storage page
+   with "Public bucket" left OFF.
+   Not wired into any feature yet - these are the building blocks (upload, signed read link, delete)
+   ready for whenever a specific need for private files comes up (verification documents, exports,
+   anything sellers or the platform need kept but not shown to just anyone with a link). */
+const privAcct = () => ({
+  url: cleanEnv(E.SUPABASE_PRIVATE_URL) || cleanEnv(E.SUPABASE_URL),
+  key: cleanEnv(E.SUPABASE_PRIVATE_KEY) || cleanEnv(E.SUPABASE_SERVICE_KEY),
+  bucket: cleanEnv(E.SUPABASE_PRIVATE_BUCKET) || 'strand-private'
+});
+const privOn = () => { const a = privAcct(); return !!(a.url && a.key); };
+// path is yours to choose, e.g. 'verify/<slug>/<filename>' - keep it scoped so one store can't guess another's files
+async function privUpload(path, buffer, contentType) {
+  const a = privAcct(); if (!a.url || !a.key) throw new Error('Private file storage is not set up yet.');
+  const url = String(a.url).replace(/\/$/, '') + '/storage/v1/object/' + a.bucket + '/' + path;
+  const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + a.key, 'Content-Type': contentType || 'application/octet-stream', 'x-upsert': 'true' }, body: buffer });
+  if (!r.ok && r.status !== 409) { const t = await r.text().catch(() => ''); throw new Error('private file upload ' + r.status + ' ' + t.slice(0, 200)); }
+  return path;
+}
+// a time-limited link (default 10 minutes) for handing a private file to someone authorized to see it, without making it public
+async function privSignedUrl(path, expiresSeconds) {
+  const a = privAcct(); if (!a.url || !a.key) throw new Error('Private file storage is not set up yet.');
+  const url = String(a.url).replace(/\/$/, '') + '/storage/v1/object/sign/' + a.bucket + '/' + path;
+  const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + a.key, 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresIn: Math.max(30, Math.min(86400, +expiresSeconds || 600)) }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.signedURL) throw new Error('private file signed-url ' + r.status + ' ' + JSON.stringify(j).slice(0, 200));
+  return String(a.url).replace(/\/$/, '') + '/storage/v1' + j.signedURL;
+}
+async function privDelete(path) {
+  const a = privAcct(); if (!a.url || !a.key) return;
+  const url = String(a.url).replace(/\/$/, '') + '/storage/v1/object/' + a.bucket + '/' + path;
+  await fetch(url, { method: 'DELETE', headers: { Authorization: 'Bearer ' + a.key } }).catch(() => {});
+}
 // validates+checks a freshly submitted picture (base64 data URI), then returns what should be stored:
 // the Supabase CDN URL when configured, otherwise the base64 itself (old inline behaviour), or '' to clear it.
 async function picIn(im, b, errLabel, slug) {

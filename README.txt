@@ -51,6 +51,19 @@ MAIN DATABASE (optional: Supabase Postgres as the primary database, Firestore as
        Supabase as primary - see that file's own instructions at the top. It only copies data in; it never
        deletes anything from Firestore, which is exactly what keeps Firestore usable as the backup afterwards.
 
+PRIVATE FILES (optional: a second, non-public Supabase bucket - not wired into a feature yet)
+  SUPABASE_PRIVATE_URL     Optional. Defaults to SUPABASE_URL (the images account) if not set.
+  SUPABASE_PRIVATE_KEY     Optional. Defaults to SUPABASE_SERVICE_KEY if not set.
+  SUPABASE_PRIVATE_BUCKET  Optional. Defaults to "strand-private" if not set.
+
+  This is separate from "strand-images": that bucket is Public (anyone with a link can view a file in it,
+  which is what product photos need). This one is for files that should NOT be viewable by just anyone with
+  a link - create it in Supabase's Storage page with "Public bucket" left OFF. Nothing uploads here yet; the
+  upload/signed-link/delete functions (privUpload/privSignedUrl/privDelete in api/index.js) are built and
+  ready, waiting for a feature that needs private files (verification documents, exports, etc.) to use them.
+  Reading a private file back always goes through privSignedUrl, which hands out a short-lived link (several
+  minutes by default) rather than a permanent public one.
+
 IMAGES (optional: Supabase Storage)
   SUPABASE_URL           Your first (primary) project's URL, e.g. https://xxxx.supabase.co.
   SUPABASE_SERVICE_KEY   That project's service_role secret key (Project Settings > API). Not the anon key -
