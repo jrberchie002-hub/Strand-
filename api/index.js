@@ -264,7 +264,7 @@ const platTok = m => sign({ r: 'platform', id: m.id, uv: m.uv | 0, exp: Date.now
 async function custAuth(h) { const t = unsign(String(h.authorization || '').replace(/^Bearer /, '')); if (!t || t.r !== 'customer') return null; const c = await kvGet('cust:' + t.id); if (!c || c.deleted || (t.sv | 0) !== (c.sv | 0)) return null; return c; }
 const custTok = c => sign({ r: 'customer', id: c.id, sv: c.sv | 0, exp: Date.now() + 30 * 864e5 });
 const custAcctKey = id => { const e = emailKey(id); if (e) return 'cu:email:' + e; const p = phoneKey(id); return p ? 'cu:phone:' + p : ''; };
-const planOf = s => { const p = s.plan || 'base'; if (p === 'base') return 'base'; if (s.paidUntil && Date.parse(s.paidUntil) + 3 * 864e5 < Date.now()) return 'base'; return p; };
+const planOf = s => { const p = s.plan || 'base'; if (p === 'base') return 'base'; if (s.comp) return p; if (s.paidUntil && Date.parse(s.paidUntil) + 3 * 864e5 < Date.now()) return 'base'; return p; };   // comp (a platform admin's "free, on us" flag) keeps the plan active forever, bypassing the paidUntil expiry check entirely - this is what makes "comp" actually mean something rather than just a display badge
 const NOTE_PERM = { order: 'orders', lowstock: 'stock', payment: 'pay_view', team: 'security', security: 'security', billing: 'billing', chat: 'chat' };
 const CHAT_BASE_CAP = 7;
 async function note(s, type, text) { try { const pr = s.notify || {}; if (pr[type] === false) return; const x = (await kvGet('notes:' + s.slug)) || { l: [] }; x.l.unshift({ id: 'n' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex'), at: new Date().toISOString(), type, text: str(text, 160), read: false }); x.l = x.l.slice(0, 100); await kvSet('notes:' + s.slug, x); if (pr.email && s.email && E.RESEND_API_KEY && (type === 'order' || type === 'security')) { fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [s.email], subject: str(text, 70), text: str(text, 300) + '\n\nOpen your store to see more.' }) }).catch(() => {}); } } catch (e) {} }
@@ -406,9 +406,17 @@ const handler = async (event) => {
     try { await seed(); } catch (e) { console.error('[strand] seed() failed (continuing without sample stores):', e && e.stack || e); }
     let m;
     if (M === 'GET' && (m = p.match(/^\/api\/store\/([a-z0-9-]{1,30})$/))) { const s = await kvGet('store:' + m[1]); if (!s) return J(404, { error: "We couldn't find that store. Check the link and try again." }); { await withProductImgs(s); const cc = await ctlGet(); return J(200, { store: pubStore(s), notice: cc.banner || '', maint: !!cc.maint, suspended: s.suspended ? { reason: s.suspended.reason || '', at: s.suspended.at } : null }); } }
+    if (M === 'GET' && (m = p.match(/^\/api\/invite\/([A-Za-z0-9]{4,20})$/))) {
+      const inv0 = (await kvGet('invites')) || { l: [] }, found = inv0.l.find(x => x.id === m[1]);
+      if (!found) return J(404, { error: 'This invite link is not valid. Ask for a new one.' });
+      if (found.usedAt) return J(410, { error: 'This invite link has already been used. Ask for a new one.' });
+      return J(200, { plan: found.plan, note: found.note || '' });
+    }
     if (M === 'POST' && p === '/api/signup') {
       if (limited(ip, 'su', 6, 3600e3)) return J(429, { error: 'Too many tries. Wait a little and try again.' });
       if (b.hp) return J(400, { error: 'That did not look right. Try again.' });
+      let inviteRec = null;
+      if (b.invite) { const inv1 = (await kvGet('invites')) || { l: [] }; inviteRec = inv1.l.find(x => x.id === str(b.invite, 20) && !x.usedAt); if (!inviteRec) return J(400, { error: 'This invite link is not valid or has already been used.' }); }
       const ph = phoneKey(b.phone), em = emailKey(b.email), name = str(b.storeName, 40), pw = String(b.pin || '');
       if (name.length < 2) return J(400, { error: 'Give your store a name.' });
       if (!b.phone) return J(400, { error: 'Add a phone number so you can log in and get paid.' }); if (!ph) return J(400, { error: 'That phone number does not look right. Try 024 123 4567.' });
@@ -418,10 +426,11 @@ const handler = async (event) => {
       let slug = slugify(b.slug || name) || 'shop'; if (RESERVED.includes(slug)) slug += '-shop'; let i = 1, base = slug; while (await kvGet('store:' + slug)) slug = base + '-' + (++i);
       const typesIn = (Array.isArray(b.types) ? b.types : b.type ? [b.type] : []).filter(t => TYPES[t]), types = [...new Set(typesIn)].slice(0, 6); if (!types.length) types.push('other');
       const type = types[0], goals = (Array.isArray(b.goals) ? b.goals : []).filter(g => GOALS.includes(g)).slice(0, 7);
-      const suLayout = cleanLayout(b.layout, null); if (suLayout.n && (LAYOUT_EXPERT.has(suLayout.n) || suLayout.n > LAYOUT_BASE_MAX)) suLayout.n = 1; delete suLayout.parts;   // a brand-new shop starts on Base, so it only gets its 2 starter looks
+      const suLayout = cleanLayout(b.layout, null); if (!inviteRec && suLayout.n && (LAYOUT_EXPERT.has(suLayout.n) || suLayout.n > LAYOUT_BASE_MAX)) suLayout.n = 1; if (!inviteRec) delete suLayout.parts;   // a brand-new shop starts on Base, so it only gets its 2 starter looks - unless an invite already grants it a paid plan
       const rk = (await kvGet('rankctr')) || { n: 0 }; rk.n += 1; await kvSet('rankctr', rk);   // this shop's onboarding rank, baked into every one of its order IDs
-      const salt = crypto.randomBytes(16).toString('hex'), s = { slug, name, phone: ph, email: em, wa: !!(ph && b.wa), type, types, goals, listed: true, sv: 0, rank: rk.n, salt, pin: pinHash(pw, salt), about: '', area: str(b.area, 40), hours: '', delivery: '', open: true, accent: '#d4001a', theme: THEMES.includes(b.theme) && !THEME_EXPERT.has(b.theme) ? b.theme : 'classic', layout: suLayout, pal: PALS.includes(b.pal) ? b.pal : 'white', plan: 'base', currency: curFromPhone(ph), products: [], staff: [], createdAt: new Date().toISOString() };
-      await kvSet('store:' + slug, s); if (ph) await kvSet('phone:' + ph, { slug }); if (em) await kvSet('email:' + em, { slug }); await addIdx(slug); await secLog(slug, 'Account created', ip);
+      const salt = crypto.randomBytes(16).toString('hex'), s = { slug, name, phone: ph, email: em, wa: !!(ph && b.wa), type, types, goals, listed: true, sv: 0, rank: rk.n, salt, pin: pinHash(pw, salt), about: '', area: str(b.area, 40), hours: '', delivery: '', open: true, accent: '#d4001a', theme: THEMES.includes(b.theme) && !THEME_EXPERT.has(b.theme) ? b.theme : 'classic', layout: suLayout, pal: PALS.includes(b.pal) ? b.pal : 'white', plan: inviteRec ? inviteRec.plan : 'base', comp: !!inviteRec, currency: curFromPhone(ph), products: [], staff: [], createdAt: new Date().toISOString() };
+      await kvSet('store:' + slug, s); if (ph) await kvSet('phone:' + ph, { slug }); if (em) await kvSet('email:' + em, { slug }); await addIdx(slug); await secLog(slug, 'Account created' + (inviteRec ? ' via invite link (' + inviteRec.plan + ', comp)' : ''), ip);
+      if (inviteRec) { const inv2 = (await kvGet('invites')) || { l: [] }, rec2 = inv2.l.find(x => x.id === inviteRec.id); if (rec2) { rec2.usedAt = new Date().toISOString(); rec2.usedSlug = slug; } await kvSet('invites', inv2); }
       return J(200, { token: tok(s, 'owner'), slug });
     }
     if (M === 'POST' && p === '/api/login') {
@@ -767,6 +776,25 @@ const handler = async (event) => {
         }
         await kvSet('store:' + st.slug, st); await secLog('platform', 'Changed store ' + st.slug + ' (' + pm.name + ')', ip);
         return J(200, assignedPin ? { ok: true, credentials: { phone: st.phone || '', email: st.email || '', pin: assignedPin } } : { ok: true });
+      }
+      if (M === 'GET' && p === '/api/platform/invites') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to invites.' });
+        const invL = (await kvGet('invites')) || { l: [] }; return J(200, { invites: invL.l.slice(0, 200) });
+      }
+      if (M === 'POST' && p === '/api/platform/invite') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to invites.' });
+        const invR = (await kvGet('invites')) || { l: [] };
+        if (b.revoke) {
+          const ix = invR.l.findIndex(x => x.id === str(b.revoke, 20) && !x.usedAt);
+          if (ix > -1) { invR.l.splice(ix, 1); await kvSet('invites', invR); await secLog('platform', 'Revoked an invite link (' + pm.name + ')', ip); }
+          return J(200, { ok: true });
+        }
+        if (!['pro', 'expert', 'business'].includes(b.plan)) return J(400, { error: 'Pick Plus, Pro or Business.' });
+        let id; do { id = crypto.randomBytes(5).toString('hex'); } while (invR.l.some(x => x.id === id));
+        invR.l.unshift({ id, plan: b.plan, note: str(b.note, 80), createdAt: new Date().toISOString(), by: pm.name, usedAt: '', usedSlug: '' });
+        invR.l = invR.l.slice(0, 500);
+        await kvSet('invites', invR); await secLog('platform', 'Created an invite link for ' + b.plan + ' (' + pm.name + ')', ip);
+        return J(200, { id });
       }
       if (M === 'POST' && p === '/api/platform/impersonate') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to edit stores.' });
