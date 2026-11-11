@@ -221,7 +221,7 @@ const sign = o => { const p = b64(JSON.stringify(o)); return p + '.' + crypto.cr
 const unsign = t => { try { const [p, s] = String(t).split('.'); const ok = crypto.createHmac('sha256', SECRET()).update(p).digest('base64url'); if (s.length !== ok.length || !crypto.timingSafeEqual(Buffer.from(s), Buffer.from(ok))) return null; const o = JSON.parse(Buffer.from(p, 'base64url').toString()); return o.exp > Date.now() ? o : null; } catch (e) { return null; } };
 const phoneKey = p => { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('0') && d.length === 10) d = '233' + d.slice(1); return d.length >= 9 && d.length <= 15 ? d : ''; };
 const str = (x, n) => String(x == null ? '' : x).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
-const PAY_TO_DEFAULT = 'Mobile money: 050 621 390\nJoel Richman Berchie', INVOICE_FROM = 'Joel Richman Berchie - your developer';
+const PAY_TO_DEFAULT = 'Mobile money: 050 621 3903\nJoel Richman Berchie', INVOICE_FROM = 'Joel Richman Berchie - your developer';
 const strML = (x, n) => String(x == null ? '' : x).replace(/\r\n/g, '\n').replace(/[\u0000-\u0009\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, n);
 const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 const hits = new Map(); const limited = (ip, k, n, ms) => { const key = k + ip, now = Date.now(), a = (hits.get(key) || []).filter(t => now - t < ms); a.push(now); hits.set(key, a); if (hits.size > 5000) hits.clear(); return a.length > n; };
