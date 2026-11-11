@@ -72,12 +72,54 @@ async function fs(method, docId, body) {
   }
   return t ? JSON.parse(t) : null;
 }
-const kvGet = async k => { if (!fbOn()) return mem.get(k) || null; const r = await fs('GET', k); return (r && r.fields && r.fields.value) ? fromFs(r.fields.value) : null; };
-const kvSet = async (k, v) => {
-  const clean = v && typeof v === 'object' ? JSON.parse(JSON.stringify(v, (kk, vv) => (kk[0] === '_' ? undefined : vv))) : v;
+const fsKvGet = async k => { if (!fbOn()) return mem.get(k) || null; const r = await fs('GET', k); return (r && r.fields && r.fields.value) ? fromFs(r.fields.value) : null; };
+const fsKvSet = async (k, clean) => {
   if (!fbOn()) { if (clean === null || clean === undefined) mem.delete(k); else mem.set(k, clean); return; }
   if (clean === null || clean === undefined) { await fs('DELETE', k).catch(() => {}); return; }
   await fs('PATCH', k, { fields: { value: toFs(clean) } });
+};
+/* ---------- primary database: Supabase Postgres, with Firestore kept as a live backup/reservoir ----------
+   When SUPABASE_DB_URL/SUPABASE_DB_KEY are configured, every read and write goes to Supabase's Postgres
+   (via its REST API, a "kv_store" table - see README.txt for the one-time SQL to create it) as the primary
+   database. Firestore, when also configured, is written to right alongside Supabase on every save - not a
+   one-time snapshot, but a live mirror - so it stays a trustworthy reservoir if Supabase ever has a problem:
+   a read falls back to Firestore automatically when Supabase can't be reached. A failed Firestore mirror
+   write is logged but never fails the actual request - Supabase succeeding is what matters for the response.
+   Without SUPABASE_DB_URL/SUPABASE_DB_KEY set, nothing here changes: Firestore (or memory) works exactly as
+   it always has. */
+const sbDbOn = () => !!(cleanEnv(E.SUPABASE_DB_URL) && cleanEnv(E.SUPABASE_DB_KEY));
+async function sbDbGet(key) {
+  const base = cleanEnv(E.SUPABASE_DB_URL).replace(/\/$/, ''), apikey = cleanEnv(E.SUPABASE_DB_KEY);
+  const r = await fetch(base + '/rest/v1/kv_store?key=eq.' + encodeURIComponent(key) + '&select=value', { headers: { apikey, Authorization: 'Bearer ' + apikey } });
+  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('supabase db get ' + r.status + ' ' + t.slice(0, 200)); }
+  const rows = await r.json();
+  return rows.length ? rows[0].value : null;
+}
+async function sbDbSet(key, clean) {
+  const base = cleanEnv(E.SUPABASE_DB_URL).replace(/\/$/, ''), apikey = cleanEnv(E.SUPABASE_DB_KEY);
+  if (clean === null || clean === undefined) {
+    const r = await fetch(base + '/rest/v1/kv_store?key=eq.' + encodeURIComponent(key), { method: 'DELETE', headers: { apikey, Authorization: 'Bearer ' + apikey } });
+    if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('supabase db delete ' + r.status + ' ' + t.slice(0, 200)); }
+    return;
+  }
+  const r = await fetch(base + '/rest/v1/kv_store?on_conflict=key', { method: 'POST', headers: { apikey, Authorization: 'Bearer ' + apikey, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates,return=minimal' }, body: JSON.stringify({ key, value: clean, updated_at: new Date().toISOString() }) });
+  if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error('supabase db set ' + r.status + ' ' + t.slice(0, 200)); }
+}
+const kvGet = async k => {
+  if (sbDbOn()) {
+    try { return await sbDbGet(k); }
+    catch (e) { console.error('[strand] Supabase DB read failed, falling back to the Firestore reservoir: ' + e.message); if (fbOn()) { try { return await fsKvGet(k); } catch (e2) { console.error('[strand] Firestore reservoir read also failed: ' + e2.message); } } return null; }
+  }
+  return fsKvGet(k);
+};
+const kvSet = async (k, v) => {
+  const clean = v && typeof v === 'object' ? JSON.parse(JSON.stringify(v, (kk, vv) => (kk[0] === '_' ? undefined : vv))) : v;
+  if (sbDbOn()) {
+    await sbDbSet(k, clean);   // primary write - must succeed, errors propagate to the caller as before
+    if (fbOn()) { try { await fsKvSet(k, clean); } catch (e) { console.error('[strand] Firestore reservoir mirror write failed (non-fatal): ' + e.message); } }
+    return;
+  }
+  return fsKvSet(k, clean);
 };
 /* ---------- images: Supabase Storage if configured, else kept as base64 inline ----------
    Two Supabase accounts/projects can be configured (SUPABASE_URL/SUPABASE_SERVICE_KEY for the first,

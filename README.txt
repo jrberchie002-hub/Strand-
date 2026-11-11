@@ -18,6 +18,39 @@ ENVIRONMENT VARIABLES (set in Vercel > Settings > Environment Variables)
   Data lives in a single Firestore collection called "strand_kv" - one document per internal key. Nothing else
   needs to be created by hand.
 
+MAIN DATABASE (optional: Supabase Postgres as the primary database, Firestore as a live backup)
+  SUPABASE_DB_URL        A second Supabase project's URL, e.g. https://yyyy.supabase.co. Use a DIFFERENT
+                          Supabase project/account than the one used for IMAGES below - keep them separate.
+  SUPABASE_DB_KEY        That project's service_role secret key (Project Settings > API). Keep it secret.
+
+  Without these two set, nothing changes - Firestore (or memory, if Firestore isn't set up either) stays the
+  only database, exactly as described above. With them set, Supabase's Postgres becomes the PRIMARY database:
+  every signup, order, product, setting - everything - is read from and written to Supabase first. Firestore,
+  if also configured, is kept as a live mirror: every single write goes to Firestore too, right alongside
+  Supabase, so it's always a current, trustworthy backup rather than a stale snapshot. If Supabase ever has a
+  problem, reads automatically fall back to reading from the Firestore mirror instead, with no visible error
+  to sellers or shoppers - it just keeps working off the backup until Supabase is healthy again. A failed
+  Firestore mirror write is logged but never blocks or fails the actual request.
+
+  Set up:
+    1. Create a second, separate Supabase project (a different account from the one used for image storage,
+       so a problem with one never affects the other).
+    2. Open its SQL Editor and run this once:
+         create table if not exists kv_store (
+           key text primary key,
+           value jsonb,
+           updated_at timestamptz not null default now()
+         );
+         alter table kv_store enable row level security;
+       (Row Level Security with no policies means only the service_role key - which bypasses RLS entirely -
+       can read or write this table; nothing else can touch it, even by accident.)
+    3. Project Settings > API > copy the Project URL into SUPABASE_DB_URL and the service_role key into
+       SUPABASE_DB_KEY. Redeploy.
+    4. If you already have real stores/orders in Firestore from before this was set up, run the migration
+       script once (scripts/migrate-firestore-to-supabase.js) to copy everything across before relying on
+       Supabase as primary - see that file's own instructions at the top. It only copies data in; it never
+       deletes anything from Firestore, which is exactly what keeps Firestore usable as the backup afterwards.
+
 IMAGES (optional: Supabase Storage)
   SUPABASE_URL           Your first (primary) project's URL, e.g. https://xxxx.supabase.co.
   SUPABASE_SERVICE_KEY   That project's service_role secret key (Project Settings > API). Not the anon key -
