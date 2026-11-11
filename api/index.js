@@ -799,6 +799,24 @@ const handler = async (event) => {
         await kvSet('store:' + st.slug, st); await secLog('platform', 'Changed store ' + st.slug + ' (' + pm.name + ')', ip);
         return J(200, assignedPin ? { ok: true, credentials: { phone: st.phone || '', email: st.email || '', pin: assignedPin } } : { ok: true });
       }
+      // An invoice Strand raises for a store (maintenance, a feature build, a cleanup) - it lands in the
+      // owner's Billing page, their notification bell, and their inbox when email is on.
+      if (M === 'POST' && p === '/api/platform/invoice') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to invoices.' }); const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' });
+        const iv = (await kvGet('inv:' + st.slug)) || { l: [] };
+        if (b.paidId) { const rec = iv.l.find(x => x.id === str(b.paidId, 40)); if (!rec) return J(404, { error: 'No such invoice.' }); rec.status = 'paid'; rec.paidAt = new Date().toISOString(); await kvSet('inv:' + st.slug, iv); await note(st, 'billing', 'Invoice ' + rec.id.toUpperCase() + ' marked paid. Thank you!'); return J(200, { ok: true }); }
+        if (b.voidId) { const rec = iv.l.find(x => x.id === str(b.voidId, 40)); if (rec) { rec.status = 'void'; await kvSet('inv:' + st.slug, iv); } return J(200, { ok: true }); }
+        const lines = (Array.isArray(b.lines) ? b.lines : []).map(l => ({ desc: str(l && l.desc, 120), amount: Math.round((+(l && l.amount) || 0) * 100) / 100 })).filter(l => l.desc && l.amount > 0).slice(0, 10);
+        if (!lines.length) return J(400, { error: 'Add at least one line with a description and an amount.' });
+        const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100, id = 'iv' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
+        const rec = { id, plan: 'Service', amount, lines, note: strML(b.note, 1200), due: /^\d{4}-\d{2}-\d{2}/.test(b.due || '') ? String(b.due).slice(0, 10) : '', at: new Date().toISOString(), via: 'Strand', status: 'due', by: pm.name };
+        iv.l.unshift(rec); iv.l = iv.l.slice(0, 100); await kvSet('inv:' + st.slug, iv);
+        await note(st, 'billing', 'New invoice from Strand: GH₵ ' + amount + (rec.due ? ', due ' + rec.due : '') + '. Open Billing to see the details.');
+        if (E.RESEND_API_KEY && EMAIL_RE.test(st.email || '')) { try { await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [st.email], subject: 'Invoice from Strand for ' + st.name + ': GH₵ ' + amount, text: 'Hi,\n\nHere is your invoice from Strand for ' + st.name + '.\n\n' + lines.map(l => l.desc + ' - GH₵ ' + l.amount).join('\n') + '\n\nTotal: GH₵ ' + amount + (rec.due ? '\nDue: ' + rec.due : '') + (rec.note ? '\n\n' + rec.note : '') + '\n\nYou can see this any time under Billing in your Strand dashboard.' }) }); } catch (e) {} }
+        await secLog('platform', 'Sent an invoice of GH₵ ' + amount + ' to ' + st.slug + ' (' + pm.name + ')', ip);
+        return J(200, { ok: true, invoice: rec });
+      }
+      if (M === 'GET' && p === '/api/platform/invoices') { if (!pcan('shops_edit')) return J(403, { error: 'No access.' }); const st = await kvGet('store:' + str((event.queryStringParameters || {}).slug, 40)); if (!st) return J(404, { error: 'No such shop' }); return J(200, { invoices: ((await kvGet('inv:' + st.slug)) || { l: [] }).l.slice(0, 50) }); }
       if (M === 'GET' && p === '/api/platform/invites') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to invites.' });
         const invL = (await kvGet('invites')) || { l: [] }; return J(200, { invites: invL.l.slice(0, 200) });
@@ -1118,6 +1136,40 @@ const handler = async (event) => {
         if (!['expert', 'business'].includes(planOf(s))) return J(403, { error: 'Customizing chat is a Pro and Business feature. Upgrade to customize yours.' });
         s.chat = { color: /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : (s.chat || {}).color || '', welcome: str(b.welcome, 200) };
         await kvSet('store:' + s.slug, s); return J(200, { ok: true, chatSettings: s.chat });
+      }
+      // The store's own assistant. It answers from a live snapshot of the store (orders, money, stock, chats),
+      // through Claude when ANTHROPIC_API_KEY is set, and with built-in answers for the common questions when not.
+      if (M === 'POST' && p === '/api/seller/ai') {
+        if (!can('orders')) return J(403, { error: 'You do not have access to this.' }); if (limited(s.slug, 'ai', 60, 3600e3)) return J(429, { error: 'Slow down a little - try again in a few minutes.' });
+        const q = str(b.q, 500); if (!q) return J(400, { error: 'Ask something.' });
+        const ord = ((await kvGet('orders:' + s.slug)) || { l: [] }).l, now = Date.now(), d0 = new Date().toISOString().slice(0, 10), live = ord.filter(o => o.status !== 'cancelled');
+        const today = live.filter(o => o.at.slice(0, 10) === d0), wk = live.filter(o => now - Date.parse(o.at) < 7 * 864e5), mo = live.filter(o => now - Date.parse(o.at) < 30 * 864e5), sum = l => Math.round(l.reduce((t, o) => t + o.total, 0) * 100) / 100;
+        const unpaid = live.filter(o => !o.paid && o.pay !== 'cod' && o.status !== 'done'), fresh = live.filter(o => o.status === 'new'), low = (s.products || []).filter(x => x.on !== false && x.stock != null && x.stock <= 3), out = (s.products || []).filter(x => x.on !== false && x.stock === 0);
+        const tp = {}; for (const o of mo) for (const it of o.items) tp[it.name] = (tp[it.name] || 0) + it.qty; const top = Object.entries(tp).sort((a, c) => c[1] - a[1]).slice(0, 5);
+        const cust = {}; for (const o of mo) if (o.phone) { cust[o.phone] = cust[o.phone] || { name: o.name, n: 0, t: 0 }; cust[o.phone].n++; cust[o.phone].t += o.total; } const best = Object.values(cust).sort((a, c) => c.t - a.t).slice(0, 3);
+        const cur = s.currency || 'GHS', aiName = s.aiName || String(s.name || 'Strand').split(/\s+/)[0];
+        const snap = ['Store: ' + s.name + ' (plan ' + planOf(s) + ', currency ' + cur + ', ' + (s.open === false ? 'closed' : 'open') + ')', 'Today: ' + today.length + ' orders, ' + cur + ' ' + sum(today), 'Last 7 days: ' + wk.length + ' orders, ' + cur + ' ' + sum(wk), 'Last 30 days: ' + mo.length + ' orders, ' + cur + ' ' + sum(mo), 'New orders waiting: ' + fresh.length + (fresh.length ? ' - ' + fresh.slice(0, 8).map(o => o.no + ' ' + o.name + ' ' + cur + ' ' + o.total).join('; ') : ''), 'Unpaid (not cash on delivery): ' + unpaid.length + (unpaid.length ? ' - ' + unpaid.slice(0, 8).map(o => o.no + ' ' + o.name + ' ' + cur + ' ' + o.total + ' via ' + o.pay).join('; ') : ''), 'Low stock (3 or fewer): ' + (low.length ? low.map(x => x.name + ' (' + x.stock + ')').join(', ') : 'none'), 'Out of stock: ' + (out.length ? out.map(x => x.name).join(', ') : 'none'), 'Products: ' + (s.products || []).filter(x => x.on !== false).length + ' live', 'Best sellers (30 days): ' + (top.length ? top.map(t => t[0] + ' x' + t[1]).join(', ') : 'none yet'), 'Best customers (30 days): ' + (best.length ? best.map(c => c.name + ' (' + c.n + ' orders, ' + cur + ' ' + Math.round(c.t) + ')').join(', ') : 'none yet')].join('\n');
+        if (E.ANTHROPIC_API_KEY) {
+          try {
+            const hist = (Array.isArray(b.history) ? b.history : []).slice(-8).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: str(m.text, 600) })).filter(m => m.content);
+            const ac = new AbortController(), tm = setTimeout(() => ac.abort(), 20000);
+            const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ac.signal, headers: { 'x-api-key': E.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, body: JSON.stringify({ model: E.AI_MODEL || 'claude-haiku-5-5', max_tokens: 500, system: 'You are ' + aiName + ', the in-dashboard assistant for a small shop on Strand, a Ghanaian storefront platform. You help the shop owner run the shop: answer questions about sales, orders, money, stock and customers using ONLY the live snapshot below, give short practical advice, and keep it warm and plain (no jargon, no markdown headers, short paragraphs or a short list at most). Amounts are in ' + cur + '. If something is not in the snapshot, say you cannot see it here and tell them where in the dashboard to look (Orders, Payments, Stock, Customers, Billing, Settings). Never invent numbers.\n\nLIVE SNAPSHOT\n' + snap, messages: hist.concat([{ role: 'user', content: q }]) }) }); clearTimeout(tm);
+            const j = await r.json(); const a = j && j.content && j.content[0] && j.content[0].text; if (a) return J(200, { a: String(a).slice(0, 2000), name: aiName });
+          } catch (e) {}
+        }
+        // Built-in answers when no model key is set (or the call failed): the questions owners ask most.
+        const ql = q.toLowerCase(), m$ = n => cur + ' ' + n; let a = '';
+        if (/today|this morning|so far/.test(ql) && /sale|sold|revenue|money|order|how much|made/.test(ql)) a = 'Today so far: ' + today.length + ' order' + (today.length === 1 ? '' : 's') + ' worth ' + m$(sum(today)) + '.' + (fresh.length ? ' ' + fresh.length + ' still waiting for you to accept.' : '');
+        else if (/week/.test(ql)) a = 'Last 7 days: ' + wk.length + ' orders, ' + m$(sum(wk)) + '.';
+        else if (/month|30 days/.test(ql)) a = 'Last 30 days: ' + mo.length + ' orders, ' + m$(sum(mo)) + '.' + (top.length ? ' Best seller: ' + top[0][0] + ' (' + top[0][1] + ' sold).' : '');
+        else if (/unpaid|not paid|owe|pending payment|who.*paid/.test(ql)) a = unpaid.length ? unpaid.length + ' order' + (unpaid.length === 1 ? ' is' : 's are') + ' still unpaid: ' + unpaid.slice(0, 8).map(o => o.no + ' (' + o.name + ', ' + m$(o.total) + ')').join(', ') + '. Open Payments to confirm any you have received.' : 'Everything that should be paid is paid. Nice.';
+        else if (/new order|waiting|accept|pending order/.test(ql)) a = fresh.length ? fresh.length + ' new order' + (fresh.length === 1 ? '' : 's') + ' waiting: ' + fresh.slice(0, 8).map(o => o.no + ' from ' + o.name + ', ' + m$(o.total)).join('; ') + '. Open Orders to accept them.' : 'No new orders waiting right now.';
+        else if (/stock|running low|out of|restock|inventory/.test(ql)) a = (out.length ? 'Out of stock: ' + out.map(x => x.name).join(', ') + '. ' : '') + (low.length ? 'Running low: ' + low.map(x => x.name + ' (' + x.stock + ' left)').join(', ') + '.' : 'Nothing is running low.') + ' You can top up under Stock.';
+        else if (/best|top|popular|most sold|selling/.test(ql)) a = top.length ? 'Your best sellers over the last 30 days: ' + top.map(t => t[0] + ' (' + t[1] + ' sold)').join(', ') + '.' : 'No sales in the last 30 days yet, so no best seller to show.';
+        else if (/customer|buyer|who buys|loyal/.test(ql)) a = best.length ? 'Your top customers this month: ' + best.map(c => c.name + ' - ' + c.n + ' orders, ' + m$(Math.round(c.t))).join('; ') + '. See everyone under Customers.' : 'No repeat customers to show yet.';
+        else if (/hello|hi\b|hey|who are you|what can you/.test(ql)) a = 'Hi, I am ' + aiName + ', your store assistant. Ask me things like "how much did I make today", "which orders are unpaid", "what is running low", or "what sells best".';
+        else a = 'Here is where ' + s.name + ' stands: today ' + today.length + ' orders (' + m$(sum(today)) + '), this week ' + wk.length + ' (' + m$(sum(wk)) + '). ' + (fresh.length ? fresh.length + ' new order' + (fresh.length === 1 ? '' : 's') + ' waiting. ' : '') + (unpaid.length ? unpaid.length + ' unpaid. ' : '') + (low.length ? low.length + ' item' + (low.length === 1 ? '' : 's') + ' running low. ' : '') + 'Ask me about sales, orders, payments, stock or customers.';
+        return J(200, { a, name: aiName });
       }
       if (p === '/api/seller/notes') {
         const x = (await kvGet('notes:' + s.slug)) || { l: [] };
