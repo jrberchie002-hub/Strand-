@@ -221,6 +221,7 @@ const sign = o => { const p = b64(JSON.stringify(o)); return p + '.' + crypto.cr
 const unsign = t => { try { const [p, s] = String(t).split('.'); const ok = crypto.createHmac('sha256', SECRET()).update(p).digest('base64url'); if (s.length !== ok.length || !crypto.timingSafeEqual(Buffer.from(s), Buffer.from(ok))) return null; const o = JSON.parse(Buffer.from(p, 'base64url').toString()); return o.exp > Date.now() ? o : null; } catch (e) { return null; } };
 const phoneKey = p => { let d = String(p || '').replace(/\D/g, ''); if (d.startsWith('0') && d.length === 10) d = '233' + d.slice(1); return d.length >= 9 && d.length <= 15 ? d : ''; };
 const str = (x, n) => String(x == null ? '' : x).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, n);
+const strML = (x, n) => String(x == null ? '' : x).replace(/\r\n/g, '\n').replace(/[\u0000-\u0009\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, n);
 const slugify = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
 const hits = new Map(); const limited = (ip, k, n, ms) => { const key = k + ip, now = Date.now(), a = (hits.get(key) || []).filter(t => now - t < ms); a.push(now); hits.set(key, a); if (hits.size > 5000) hits.clear(); return a.length > n; };
 const ekey = () => crypto.createHash('sha256').update('k:' + SECRET()).digest();
@@ -815,12 +816,15 @@ const handler = async (event) => {
       }
       if (p === '/api/platform/control') {
         if (!pcan('control')) return J(403, { error: 'You do not have access to platform settings.' });
-        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1, heroVideo: c2.heroVideo || '' }); }
+        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1, heroVideo: c2.heroVideo || '', about: c2.about || '', partners: c2.partners || '', infoDesk: c2.infoDesk || '' }); }
         const c3 = await ctlGet();
         if (b.banner !== undefined) c3.banner = str(b.banner, 120);
         if (typeof b.maintenance === 'boolean') c3.maint = b.maintenance;
         if (b.nameLimit !== undefined) { const n = Math.max(0, Math.min(20, +b.nameLimit || 0)); c3.nameLimit = n; }
         if (b.slugLimit !== undefined) { const n = Math.max(0, Math.min(20, +b.slugLimit || 0)); c3.slugLimit = n; }
+        if (b.about !== undefined) c3.about = strML(b.about, 2000);
+        if (b.partners !== undefined) c3.partners = strML(b.partners, 3000);
+        if (b.infoDesk !== undefined) c3.infoDesk = strML(b.infoDesk, 600);
         await kvSet('ctl', c3); await secLog('platform', 'Changed platform settings (' + pm.name + ')', ip);
         return J(200, { ok: true });
       }
@@ -838,6 +842,7 @@ const handler = async (event) => {
         return J(200, { ok: true, url });
       }
       if (M === 'GET' && p === '/api/landing') { const c5 = await ctlGet(); return J(200, { heroVideo: c5.heroVideo || '' }); }
+      if (M === 'GET' && p === '/api/about') { const c6 = await ctlGet(); return J(200, { about: c6.about || '', partners: c6.partners || '', infoDesk: c6.infoDesk || '', version: '2.7', team: 'Kora Tech Farm', lead: 'Joel Richman Berchie' }); }
       if (M === 'GET' && p === '/api/platform/requests') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); return J(200, { reqs: ((await kvGet('reqs')) || { l: [] }).l }); }
       if (M === 'POST' && p === '/api/platform/request') { if (!pcan('requests')) return J(403, { error: 'You do not have access to this.' }); const r = (await kvGet('reqs')) || { l: [] }, q = r.l.find(x => x.id === b.id); if (q) { q.done = !!b.done; await kvSet('reqs', r); } return J(200, { ok: true }); }
       if (p === '/api/platform/team') {
