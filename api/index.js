@@ -804,15 +804,18 @@ const handler = async (event) => {
       if (M === 'POST' && p === '/api/platform/invoice') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to invoices.' }); const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' });
         const iv = (await kvGet('inv:' + st.slug)) || { l: [] };
-        if (b.paidId) { const rec = iv.l.find(x => x.id === str(b.paidId, 40)); if (!rec) return J(404, { error: 'No such invoice.' }); rec.status = 'paid'; rec.paidAt = new Date().toISOString(); await kvSet('inv:' + st.slug, iv); await note(st, 'billing', 'Invoice ' + rec.id.toUpperCase() + ' marked paid. Thank you!'); return J(200, { ok: true }); }
+        const paidOf = r => Math.round((r.payments || []).reduce((t, x) => t + x.amount, 0) * 100) / 100;
+        if (b.paidId || b.payId) { const rec = iv.l.find(x => x.id === str(b.paidId || b.payId, 40)); if (!rec) return J(404, { error: 'No such invoice.' }); const amt = b.payId ? Math.round((+b.amount || 0) * 100) / 100 : Math.max(0, rec.amount - paidOf(rec)); if (!(amt > 0)) return J(400, { error: 'Enter the amount received.' }); rec.payments = (rec.payments || []).concat([{ amount: amt, at: new Date().toISOString(), how: str(b.how, 60), by: pm.name }]); const bal = Math.round((rec.amount - paidOf(rec)) * 100) / 100; rec.status = bal <= 0 ? 'paid' : 'part'; if (bal <= 0) rec.paidAt = new Date().toISOString(); await kvSet('inv:' + st.slug, iv); await note(st, 'billing', bal <= 0 ? 'Invoice ' + rec.no + ' is fully paid. Thank you!' : 'GH₵ ' + amt + ' received on invoice ' + rec.no + '. Balance left: GH₵ ' + bal + '.'); return J(200, { ok: true, invoice: rec }); }
         if (b.voidId) { const rec = iv.l.find(x => x.id === str(b.voidId, 40)); if (rec) { rec.status = 'void'; await kvSet('inv:' + st.slug, iv); } return J(200, { ok: true }); }
         const lines = (Array.isArray(b.lines) ? b.lines : []).map(l => ({ desc: str(l && l.desc, 120), amount: Math.round((+(l && l.amount) || 0) * 100) / 100 })).filter(l => l.desc && l.amount > 0).slice(0, 10);
         if (!lines.length) return J(400, { error: 'Add at least one line with a description and an amount.' });
         const amount = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100, id = 'iv' + Date.now().toString(36) + crypto.randomBytes(2).toString('hex');
-        const rec = { id, plan: 'Service', amount, lines, note: strML(b.note, 1200), due: /^\d{4}-\d{2}-\d{2}/.test(b.due || '') ? String(b.due).slice(0, 10) : '', at: new Date().toISOString(), via: 'Strand', status: 'due', by: pm.name };
+        const ctlI = await ctlGet(), at = new Date(), seq = iv.l.filter(x => x.no).length + 1, no = 'INV-' + at.toISOString().slice(0, 7).replace('-', '') + '-' + shopInitials(st.name) + String(seq).padStart(3, '0');
+        const period = str(b.period, 40) || at.toLocaleString('en-GB', { month: 'long', year: 'numeric' });
+        const rec = { id, no, period, plan: 'Service', amount, lines, note: strML(b.note, 2000), due: /^\d{4}-\d{2}-\d{2}/.test(b.due || '') ? String(b.due).slice(0, 10) : '', at: at.toISOString(), via: 'Strand', status: 'due', by: pm.name, payTo: ctlI.payTo || '', payments: [], partOk: b.partOk !== false };
         iv.l.unshift(rec); iv.l = iv.l.slice(0, 100); await kvSet('inv:' + st.slug, iv);
-        await note(st, 'billing', 'New invoice from Strand: GH₵ ' + amount + (rec.due ? ', due ' + rec.due : '') + '. Open Billing to see the details.');
-        if (E.RESEND_API_KEY && EMAIL_RE.test(st.email || '')) { try { await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [st.email], subject: 'Invoice from Strand for ' + st.name + ': GH₵ ' + amount, text: 'Hi,\n\nHere is your invoice from Strand for ' + st.name + '.\n\n' + lines.map(l => l.desc + ' - GH₵ ' + l.amount).join('\n') + '\n\nTotal: GH₵ ' + amount + (rec.due ? '\nDue: ' + rec.due : '') + (rec.note ? '\n\n' + rec.note : '') + '\n\nYou can see this any time under Billing in your Strand dashboard.' }) }); } catch (e) {} }
+        await note(st, 'billing', 'Invoice alert: ' + no + ' for ' + period + ' - GH₵ ' + amount + (rec.due ? ', due ' + rec.due : '') + '. Sent ' + at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + '. Open Invoices for the full breakdown.');
+        if (E.RESEND_API_KEY && EMAIL_RE.test(st.email || '')) { try { await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + E.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: E.MAIL_FROM || 'Strand <onboarding@resend.dev>', to: [st.email], subject: 'Invoice ' + no + ' from Strand for ' + st.name + ': GH₵ ' + amount, text: 'Hi,\n\nHere is your invoice from Strand for ' + st.name + ' (' + period + ').\n\n' + lines.map(l => l.desc + ' - GH₵ ' + l.amount).join('\n') + '\n\nTotal: GH₵ ' + amount + (rec.due ? '\nDue: ' + rec.due : '') + (rec.payTo ? '\n\nPay to:\n' + rec.payTo : '') + (rec.note ? '\n\n' + rec.note : '') + '\n\nYou can see this any time under Invoices in your Strand dashboard.' }) }); } catch (e) {} }
         await secLog('platform', 'Sent an invoice of GH₵ ' + amount + ' to ' + st.slug + ' (' + pm.name + ')', ip);
         return J(200, { ok: true, invoice: rec });
       }
@@ -845,7 +848,7 @@ const handler = async (event) => {
       }
       if (p === '/api/platform/control') {
         if (!pcan('control')) return J(403, { error: 'You do not have access to platform settings.' });
-        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1, heroVideo: c2.heroVideo || '', about: c2.about || '', partners: c2.partners || '', infoDesk: c2.infoDesk || '' }); }
+        if (M === 'GET') { const c2 = await ctlGet(); return J(200, { banner: c2.banner || '', maintenance: !!c2.maint, nameLimit: c2.nameLimit != null ? c2.nameLimit : 2, slugLimit: c2.slugLimit != null ? c2.slugLimit : 1, heroVideo: c2.heroVideo || '', about: c2.about || '', partners: c2.partners || '', infoDesk: c2.infoDesk || '', payTo: c2.payTo || '' }); }
         const c3 = await ctlGet();
         if (b.banner !== undefined) c3.banner = str(b.banner, 120);
         if (typeof b.maintenance === 'boolean') c3.maint = b.maintenance;
@@ -853,7 +856,7 @@ const handler = async (event) => {
         if (b.slugLimit !== undefined) { const n = Math.max(0, Math.min(20, +b.slugLimit || 0)); c3.slugLimit = n; }
         if (b.about !== undefined) c3.about = strML(b.about, 2000);
         if (b.partners !== undefined) c3.partners = strML(b.partners, 3000);
-        if (b.infoDesk !== undefined) c3.infoDesk = strML(b.infoDesk, 600);
+        if (b.infoDesk !== undefined) c3.infoDesk = strML(b.infoDesk, 600); if (b.payTo !== undefined) c3.payTo = strML(b.payTo, 400);
         await kvSet('ctl', c3); await secLog('platform', 'Changed platform settings (' + pm.name + ')', ip);
         return J(200, { ok: true });
       }
@@ -1195,7 +1198,7 @@ const handler = async (event) => {
       }
       if (p === '/api/seller/billing') {
         if (!can('billing')) return J(403, { error: 'Only the owner can see billing.' }); const pr = PRICE(), inv = ((await kvGet('inv:' + s.slug)) || { l: [] }).l;
-        if (M === 'GET') return J(200, { plan: s.plan || 'base', eff: planOf(s), paidUntil: s.paidUntil || '', prices: pr, basicFeePct: BASIC_FEE_PCT, online: !!E.PAYSTACK_PLATFORM_KEY, invoices: inv.slice(0, 24) });
+        if (M === 'GET') { const ctlB = await ctlGet(); return J(200, { plan: s.plan || 'base', eff: planOf(s), paidUntil: s.paidUntil || '', prices: pr, basicFeePct: BASIC_FEE_PCT, online: !!E.PAYSTACK_PLATFORM_KEY, invoices: inv.slice(0, 24), payTo: ctlB.payTo || '' }); }
         if (limited(ip, 'bl', 10, 3600e3)) return J(429, { error: 'Too many tries. Try again later.' });
         if (b.verify) { const bl = await kvGet('bill:' + str(b.verify, 60)); if (!bl || bl.slug !== s.slug) return J(404, { error: 'Not found.' }); if (bl.done) return J(200, { ok: true, plan: s.plan }); try { const r = await ps(E.PAYSTACK_PLATFORM_KEY, '/transaction/verify/' + encodeURIComponent(b.verify)); if (r.j && r.j.data && r.j.data.status === 'success' && r.j.data.amount >= Math.round(bl.amount * 100)) { bl.done = true; await kvSet('bill:' + b.verify, bl); s.plan = bl.plan; const days = bl.period === 'yearly' ? 365 : 30; s.paidUntil = new Date(Math.max(Date.now(), Date.parse(s.paidUntil || 0) || 0) + days * 864e5).toISOString(); await kvSet('store:' + s.slug, s); const iv = (await kvGet('inv:' + s.slug)) || { l: [] }; iv.l.unshift({ id: b.verify, plan: bl.plan, amount: bl.amount, period: bl.period || 'monthly', at: new Date().toISOString(), via: 'Paystack' }); await kvSet('inv:' + s.slug, iv); await note(s, 'billing', 'Payment received. You are on ' + bl.plan + ' until ' + s.paidUntil.slice(0, 10)); return J(200, { ok: true, plan: s.plan }); } } catch (e) {} return J(200, { ok: false }); }
         if (!['pro', 'expert', 'business'].includes(b.plan)) return J(400, { error: 'Pick a plan.' });
