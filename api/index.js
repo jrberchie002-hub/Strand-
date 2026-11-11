@@ -748,6 +748,16 @@ const handler = async (event) => {
         const out = present.map((r, i) => { const st = r.st, o = orderDocs[i] || { l: [] }; return { slug: r.sl, name: st.name, phone: st.phone || '', email: st.email || '', type: st.type || 'other', types: (st.types && st.types.length ? st.types : [st.type || 'other']), area: st.area || '', about: st.about || '', plan: st.plan || 'base', theme: st.theme || 'classic', currency: st.currency || 'GHS', verified: !!st.verified, open: st.open !== false, sample: !!st.sample, comp: !!st.comp, suspended: st.suspended ? { reason: st.suspended.reason || '', at: st.suspended.at } : null, appeal: (st.appeal && st.appeal.status === 'pending') ? { text: st.appeal.text, at: st.appeal.at } : null, domain: st.domain || null, paidUntil: st.paidUntil || '', orders: o.l.length, revenue: o.l.filter(q => q.status !== 'cancelled').reduce((t, q) => t + q.total, 0), products: (st.products || []).length, inventory: (st.products || []).reduce((t, pr) => t + (typeof pr.stock === 'number' ? pr.stock : 0), 0), createdAt: st.createdAt || '' }; });
         return J(200, { shops: out });
       }
+      if (M === 'GET' && p === '/api/platform/diag') {
+        if (!pcan('shops_view')) return J(403, { error: 'You do not have access to this.' });
+        const slug = str((event.queryStringParameters || {}).slug, 40); if (!slug) return J(400, { error: 'Missing slug.' });
+        const key = 'store:' + slug;
+        const trim = v => v ? { name: v.name, createdAt: v.createdAt || '', products: (v.products || []).length, plan: v.plan || 'base', phone: v.phone || '', email: v.email || '' } : null;
+        let fromFirestore = null, fromSupabase = null, fsErr = '', sbErr = '';
+        if (fbOn()) { try { fromFirestore = await fsKvGet(key); } catch (e) { fsErr = e.message; } }
+        if (sbDbOn()) { try { fromSupabase = await sbDbGet(key); } catch (e) { sbErr = e.message; } }
+        return J(200, { slug, sbDbConfigured: sbDbOn(), fsConfigured: fbOn(), primary: sbDbOn() ? 'supabase' : (fbOn() ? 'firestore' : 'memory'), firestore: trim(fromFirestore), firestoreError: fsErr, supabase: trim(fromSupabase), supabaseError: sbErr });
+      }
       if (M === 'POST' && p === '/api/platform/shop') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to change stores.' }); const st = await kvGet('store:' + str(b.slug, 40)); if (!st) return J(404, { error: 'No such shop' });
         if (PLANS.includes(b.plan)) st.plan = b.plan; if (typeof b.verified === 'boolean') st.verified = b.verified; if (typeof b.open === 'boolean') st.open = b.open; if (b.paidUntil !== undefined) st.paidUntil = /^\d{4}-\d{2}-\d{2}/.test(b.paidUntil) ? new Date(b.paidUntil).toISOString() : ''; if (typeof b.comp === 'boolean') st.comp = b.comp;
