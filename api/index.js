@@ -101,6 +101,20 @@ async function picIn(im, b, errLabel) {
   if (!sbOn()) return { img: im };
   try { return { img: await sbUpload(im, 'p') }; } catch (e) { return { error: 'Could not save that picture. Try again.' }; }
 }
+/* ---------- product photos: kept in their own small document per product, not inside the main store document ----------
+   Without Supabase, photos are base64 and can be large; keeping them out of store:<slug> means a store with many
+   products/photos never pushes that single document over Firestore's 1MB limit. Each product's photos live in
+   their own tiny document instead, so only that one product's own photos count against any size limit. */
+const pimgKey = (slug, pid) => 'pimg:' + slug + ':' + pid;
+async function pimgGet(slug, pid) { const r = await kvGet(pimgKey(slug, pid)); return (r && r.imgs) || []; }
+async function pimgSet(slug, pid, imgs) { await kvSet(pimgKey(slug, pid), (imgs && imgs.length) ? { imgs } : null); }
+// attaches each product's photos (fetched from their own documents) onto in-memory products, for responses that need to show photos
+async function withProductImgs(s) {
+  const prods = s.products || []; if (!prods.length) return s;
+  const imgsArr = await Promise.all(prods.map(pr => pimgGet(s.slug, pr.id)));
+  prods.forEach((pr, i) => { const imgs = imgsArr[i]; pr.imgs = imgs; pr.img = imgs[0] || ''; });
+  return s;
+}
 /* ---------- helpers ---------- */
 const J = (s, o) => ({ statusCode: s, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }, body: JSON.stringify(o) });
 const sha = x => crypto.createHash('sha256').update(String(x)).digest('hex');
@@ -293,7 +307,7 @@ const handler = async (event) => {
   try {
     try { await seed(); } catch (e) { console.error('[strand] seed() failed (continuing without sample stores):', e && e.stack || e); }
     let m;
-    if (M === 'GET' && (m = p.match(/^\/api\/store\/([a-z0-9-]{1,30})$/))) { const s = await kvGet('store:' + m[1]); if (!s) return J(404, { error: "We couldn't find that store. Check the link and try again." }); { const cc = await ctlGet(); return J(200, { store: pubStore(s), notice: cc.banner || '', maint: !!cc.maint, suspended: s.suspended ? { reason: s.suspended.reason || '', at: s.suspended.at } : null }); } }
+    if (M === 'GET' && (m = p.match(/^\/api\/store\/([a-z0-9-]{1,30})$/))) { const s = await kvGet('store:' + m[1]); if (!s) return J(404, { error: "We couldn't find that store. Check the link and try again." }); { await withProductImgs(s); const cc = await ctlGet(); return J(200, { store: pubStore(s), notice: cc.banner || '', maint: !!cc.maint, suspended: s.suspended ? { reason: s.suspended.reason || '', at: s.suspended.at } : null }); } }
     if (M === 'POST' && p === '/api/signup') {
       if (limited(ip, 'su', 6, 3600e3)) return J(429, { error: 'Too many tries. Wait a little and try again.' });
       if (b.hp) return J(400, { error: 'That did not look right. Try again.' });
@@ -727,6 +741,7 @@ const handler = async (event) => {
       const paid = planOf(s) !== 'base';
       if (M === 'GET' && p === '/api/seller/me') {
         const ord = canOrders ? ((await kvGet('orders:' + s.slug)) || { l: [] }) : { l: [] }, d = new Date().toISOString().slice(0, 10), today = ord.l.filter(o => o.at.slice(0, 10) === d && o.status !== 'cancelled'), pr = s.products || [];
+        await withProductImgs(s);
         const full = pubStore(s, true); if (can('settings')) { full.goals = s.goals || []; full.sale = s.sale || { on: false, pct: 10 }; full.email = s.email || ''; full.phone = s.phone || ''; full.wa = s.wa !== false && !!s.phone; full.listed = s.listed !== false; full.apps = s.apps || {}; full.codes = s.codes || []; full.fee = s.fee || 0; full.freeAbove = s.freeAbove || 0; } if (can('pay_settings')) full.payCfg = { cod: (s.pay || {}).cod !== false, momo: (s.pay || {}).momo || null, link: (s.pay || {}).link || '', paystack: (s.pay || {}).paystack ? { last4: s.pay.paystack.last4, mode: s.pay.paystack.mode } : null, payOutRequested: !!s.payOutRequested }; if (!can('costs')) full.products.forEach(x => { delete x.cost; }); full.domain = s.domain || null; full.rules = s.rules || {}; full.notify = s.notify || {}; full.paidUntil = s.paidUntil || ''; full.planRaw = s.plan || 'base'; full.createdAt = s.createdAt || '';
         const ctlLim = await ctlGet(); const nameLim = ctlLim.nameLimit != null ? ctlLim.nameLimit : 2, slugLim = ctlLim.slugLimit != null ? ctlLim.slugLimit : 1;
         if (can('settings')) full.limits = { name: { used: s.nameChanges || 0, max: nameLim }, slug: { used: s.slugChanges || 0, max: slugLim } };
@@ -833,7 +848,7 @@ const handler = async (event) => {
       }
       if (M === 'POST' && p === '/api/seller/product') {
         if (!can('products')) return J(403, { error: 'You do not have access to edit products.' });
-        s.products = s.products || []; if (b.del) { s.products = s.products.filter(x => x.id !== b.id); await kvSet('store:' + s.slug, s); return J(200, { ok: true }); }
+        s.products = s.products || []; if (b.del) { s.products = s.products.filter(x => x.id !== b.id); await kvSet('store:' + s.slug, s); await pimgSet(s.slug, b.id, null); return J(200, { ok: true }); }
         const price = Math.round((+b.price || 0) * 100) / 100, name = str(b.name, 60); if (!name || !(price > 0)) return J(400, { error: 'Add a name and a price.' });
         const imgsIn = Array.isArray(b.imgs) ? b.imgs.slice(0, 3) : (b.img !== undefined ? [b.img] : undefined);
         let imgs; if (imgsIn !== undefined) { imgs = []; for (const one of imgsIn) { if (!one) continue; const pi = await picIn(one, b, 'That photo'); if (pi.error) return J(400, { error: pi.error }); if (pi.img) imgs.push(pi.img); } }
@@ -841,7 +856,11 @@ const handler = async (event) => {
         const sizes = Array.isArray(b.sizes) ? [...new Set(b.sizes.map(c => str(c, 12)).filter(Boolean))].slice(0, 10) : undefined;
         let pr = b.id && s.products.find(x => x.id === b.id); if (!pr) { if (s.products.length >= 200) return J(400, { error: 'You have reached 200 items.' }); pr = { id: 'p' + crypto.randomBytes(4).toString('hex') }; s.products.push(pr); }
         Object.assign(pr, { name, price, desc: str(b.desc, 140), cat: str(b.cat, 24), badge: ['', 'New', 'Sale', 'Best seller'].includes(b.badge) ? b.badge : '', was: +b.was > price ? Math.round(+b.was * 100) / 100 : 0, cost: Math.max(0, +b.cost || 0), sku: str(b.sku, 20), on: b.on !== false, ships: !!b.ships, eta: b.ships ? str(b.eta, 40) : '' });
-        if (b.stock !== undefined) pr.stock = (b.stock === null || b.stock === '') ? null : Math.max(0, Math.round(+b.stock || 0)); if (imgs !== undefined) { pr.imgs = imgs; pr.img = imgs[0] || ''; } if (colors !== undefined) pr.colors = colors; if (sizes !== undefined) pr.sizes = sizes; await kvSet('store:' + s.slug, s); return J(200, { ok: true, id: pr.id });
+        if (b.stock !== undefined) pr.stock = (b.stock === null || b.stock === '') ? null : Math.max(0, Math.round(+b.stock || 0)); if (colors !== undefined) pr.colors = colors; if (sizes !== undefined) pr.sizes = sizes;
+        delete pr.imgs; delete pr.img; // photos never live inside the store document itself - see withProductImgs/pimgSet
+        await kvSet('store:' + s.slug, s);
+        if (imgs !== undefined) await pimgSet(s.slug, pr.id, imgs);
+        return J(200, { ok: true, id: pr.id, imgs: imgs !== undefined ? imgs : await pimgGet(s.slug, pr.id) });
       }
       if (M === 'POST' && p === '/api/seller/order') {
         if (!canOrders) return J(403, { error: 'You do not have access to orders.' }); const ord = (await kvGet('orders:' + s.slug)) || { l: [] };
