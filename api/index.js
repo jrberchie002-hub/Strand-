@@ -81,26 +81,31 @@ const kvSet = async (k, v) => {
 };
 /* ---------- images: Supabase Storage if configured, else kept as base64 inline ----------
    Two Supabase accounts/projects can be configured (SUPABASE_URL/SUPABASE_SERVICE_KEY for the first,
-   SUPABASE_URL_2/SUPABASE_SERVICE_KEY_2 for the second), to get more total free storage than one
-   account alone. When both are set, each store is pinned to one account (by a hash of its slug) so
-   a given store's photos always land in the same place; when only one is set, everything uses it. */
-const sbAcct = i => i === 1 ? { url: cleanEnv(E.SUPABASE_URL_2), key: cleanEnv(E.SUPABASE_SERVICE_KEY_2) } : { url: cleanEnv(E.SUPABASE_URL), key: cleanEnv(E.SUPABASE_SERVICE_KEY) };
+   SUPABASE_URL_2/SUPABASE_SERVICE_KEY_2 for the second). The first account is always tried first;
+   the second is only used as a backup, when the first account's upload fails (network issue, bucket
+   trouble, quota, etc.) - so account 2 normally sits idle and only kicks in if account 1 has a problem.
+   Each account can use its own bucket name too (SUPABASE_BUCKET / SUPABASE_BUCKET_2), in case the
+   bucket wasn't named "strand-images" (e.g. the first bucket you made can't be renamed) - defaults
+   to "strand-images" when not set. */
+const sbAcct = i => i === 1
+  ? { url: cleanEnv(E.SUPABASE_URL_2), key: cleanEnv(E.SUPABASE_SERVICE_KEY_2), bucket: cleanEnv(E.SUPABASE_BUCKET_2) || cleanEnv(E.SUPABASE_BUCKET) || 'strand-images' }
+  : { url: cleanEnv(E.SUPABASE_URL), key: cleanEnv(E.SUPABASE_SERVICE_KEY), bucket: cleanEnv(E.SUPABASE_BUCKET) || 'strand-images' };
 const sbOn = () => { const a = sbAcct(0), b = sbAcct(1); return !!(a.url && a.key) || !!(b.url && b.key); };
-function sbPick(slug) {
-  const a = sbAcct(0), b = sbAcct(1), aOn = !!(a.url && a.key), bOn = !!(b.url && b.key);
-  if (aOn && bOn) return (crypto.createHash('sha256').update(String(slug || '')).digest()[0] % 2 === 0) ? a : b;
-  return aOn ? a : b;
-}
 const MIME_EXT = { jpeg: 'jpg', png: 'png', webp: 'webp' };
-async function sbUpload(dataUri, kind, slug) {
-  const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(dataUri); if (!m) return dataUri;
-  const acct = sbPick(slug);
-  const mime = m[1], buf = Buffer.from(m[2], 'base64'), ext = MIME_EXT[mime];
+async function sbUploadTo(acct, buf, mime, ext, kind) {
   const path = 'u/' + String(kind || 'img') + '-' + crypto.createHash('sha256').update(buf).digest('hex').slice(0, 24) + '.' + ext;
-  const url = String(acct.url).replace(/\/$/, '') + '/storage/v1/object/strand-images/' + path;
+  const url = String(acct.url).replace(/\/$/, '') + '/storage/v1/object/' + acct.bucket + '/' + path;
   const r = await fetch(url, { method: 'POST', headers: { Authorization: 'Bearer ' + acct.key, 'Content-Type': 'image/' + mime, 'x-upsert': 'true' }, body: buf });
   if (!r.ok && r.status !== 409) { const t = await r.text().catch(() => ''); throw new Error('image upload ' + r.status + ' ' + t.slice(0, 160)); }
-  return String(acct.url).replace(/\/$/, '') + '/storage/v1/object/public/strand-images/' + path;
+  return String(acct.url).replace(/\/$/, '') + '/storage/v1/object/public/' + acct.bucket + '/' + path;
+}
+async function sbUpload(dataUri, kind) {
+  const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(dataUri); if (!m) return dataUri;
+  const mime = m[1], buf = Buffer.from(m[2], 'base64'), ext = MIME_EXT[mime];
+  const a = sbAcct(0), b = sbAcct(1), aOn = !!(a.url && a.key), bOn = !!(b.url && b.key);
+  if (aOn) { try { return await sbUploadTo(a, buf, mime, ext, kind); } catch (e) { if (!bOn) throw e; /* fall through to the backup account */ } }
+  if (bOn) return await sbUploadTo(b, buf, mime, ext, kind);
+  throw new Error('No image storage account is configured.');
 }
 // validates+checks a freshly submitted picture (base64 data URI), then returns what should be stored:
 // the Supabase CDN URL when configured, otherwise the base64 itself (old inline behaviour), or '' to clear it.

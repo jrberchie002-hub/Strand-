@@ -19,28 +19,32 @@ ENVIRONMENT VARIABLES (set in Vercel > Settings > Environment Variables)
   needs to be created by hand.
 
 IMAGES (optional: Supabase Storage)
-  SUPABASE_URL           Your first project's URL, e.g. https://xxxx.supabase.co.
+  SUPABASE_URL           Your first (primary) project's URL, e.g. https://xxxx.supabase.co.
   SUPABASE_SERVICE_KEY   That project's service_role secret key (Project Settings > API). Not the anon key -
                           the service_role key is required to upload. Keep it secret, never expose it to the browser.
-  SUPABASE_URL_2         Optional. A second Supabase project's URL, if you want to use two accounts.
+  SUPABASE_BUCKET        Optional. The bucket name in the first account, if it isn't "strand-images" (default).
+  SUPABASE_URL_2         Optional. A second Supabase project's URL, used only as a backup account.
   SUPABASE_SERVICE_KEY_2 Optional. That second project's service_role key.
+  SUPABASE_BUCKET_2      Optional. The bucket name in the second account, if it isn't "strand-images" (default).
 
   Without any of these set, pictures are still accepted and stored exactly as before (inline, as base64 inside the
   shop's own record) - nothing breaks. With SUPABASE_URL/SUPABASE_SERVICE_KEY set, every picture a seller uploads
   (hero, banner, products) is instead pushed to a Supabase Storage bucket and the shop stores a normal https link
   to it - faster pages, and pictures stop counting against Firestore's 1 GiB free storage limit. Set up:
-    1. In your Supabase project, go to Storage and create a bucket named exactly "strand-images". Set it Public
-       (so shoppers' browsers can load the pictures directly).
+    1. In your Supabase project, go to Storage and create a bucket. Set it Public (so shoppers' browsers can load
+       the pictures directly). If you name it exactly "strand-images" you don't need to set SUPABASE_BUCKET; if
+       you gave it another name (bucket names can't be changed after creation), set SUPABASE_BUCKET to that name.
     2. Project Settings > API > copy the Project URL into SUPABASE_URL and the service_role key into
        SUPABASE_SERVICE_KEY.
-    3. Redeploy. No table or schema needed - this only uses Storage, not the Supabase database.
+    3. Redeploy. No table or schema needed, and no SQL/RLS policies either - uploads use the service_role key,
+       which bypasses Row Level Security entirely, and a Public bucket serves reads to anyone with no policy
+       needed. This only uses Storage, not the Supabase database.
 
-  Using two accounts: if you also set SUPABASE_URL_2/SUPABASE_SERVICE_KEY_2 (create the same "strand-images"
-  public bucket in that second project too), Strand spreads stores across both accounts automatically - each
-  store is permanently assigned to one of the two accounts (based on its store handle), so you effectively get
-  double the free storage without having to manage anything yourself. If you later remove the second account's
-  variables, stores already using it keep their existing picture links working (they're just plain URLs), but
-  any NEW pictures from those stores will go to account 1 instead.
+  Using a second account as a backup: if you also set SUPABASE_URL_2/SUPABASE_SERVICE_KEY_2 (with its own bucket,
+  public, name set via SUPABASE_BUCKET_2 if it isn't "strand-images"), the first account is always tried first;
+  account 2 only gets used for an upload if account 1's upload fails for some reason (an outage, a quota issue,
+  etc.) - so in normal operation account 2 sits idle as a safety net. A picture already saved on either account
+  keeps working either way, since what's stored is just a plain https link to wherever it landed.
 
 WHAT IS INSIDE
   Sellers sign up with a phone number OR an email (WhatsApp not required), pick what they sell and what they want to do.
