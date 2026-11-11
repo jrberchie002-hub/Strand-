@@ -121,9 +121,10 @@ async function pimgGet(slug, pid) { const r = await kvGet(pimgKey(slug, pid)); r
 async function pimgSet(slug, pid, imgs) { await kvSet(pimgKey(slug, pid), (imgs && imgs.length) ? { imgs } : null); }
 // attaches each product's photos (fetched from their own documents) onto in-memory products, for responses that need to show photos
 async function withProductImgs(s) {
-  const prods = s.products || []; if (!prods.length) return s;
-  const imgsArr = await Promise.all(prods.map(pr => pimgGet(s.slug, pr.id)));
+  const prods = s.products || []; const heroP = pimgGet(s.slug, 'hero');
+  const imgsArr = prods.length ? await Promise.all(prods.map(pr => pimgGet(s.slug, pr.id))) : [];
   prods.forEach((pr, i) => { const imgs = imgsArr[i]; if (imgs.length) { pr.imgs = imgs; pr.img = imgs[0] || ''; } else if (pr.img && !(pr.imgs && pr.imgs.length)) { pr.imgs = [pr.img]; } });
+  s.heroImgs = await heroP;
   return s;
 }
 /* ---------- helpers ---------- */
@@ -212,7 +213,7 @@ const LAYOUT_BASE_MAX = 2, LAYOUT_PRO_MAX = 12;   // Base picks from the first 2
 const ACCENT_BASE = ['#d4001a', '#0a6e3d', '#1657d1', '#7c3aed'];   // red, green, blue, purple - the 4 starter accent colours for Base
 const ACCENT_PRO = ACCENT_BASE.concat(['#ea580c', '#0891b2', '#be185d', '#111111']);   // + orange, teal, pink, near-black for the mid plan; Expert gets any hex
 const THEME_LAYOUT = { editorial: 13, aura: 14 };   // picking one of these looks also switches to its matching layout, so it actually looks different, not just a colour change
-const pubStore = (s, full) => ({ slug: s.slug, name: s.name, logo: s.logo || '', currency: CURRENCIES.includes(s.currency) ? s.currency : 'GHS', cartWord: s.cartWord === 'bag' ? 'bag' : 'cart', about: s.about || '', whatsapp: (s.wa !== false && s.phone) ? s.phone : '', call: (s.wa === false && s.phone) ? s.phone : '', type: s.type || 'other', typeName: TYPES[s.type] || TYPES.other, types: (s.types && s.types.length ? s.types : [s.type || 'other']).filter(t => TYPES[t]), area: s.area || '', hours: s.hours || '', delivery: s.delivery || '', open: s.open !== false, accent: s.accent || '#d4001a', plan: planOf(s), theme: s.theme || 'classic', layout: s.layout || null, pal: s.pal || '', verified: !!s.verified, dl: !!(s.apps || {}).delivery, fee: (s.apps || {}).delivery ? (s.fee || 0) : 0, freeAbove: (s.apps || {}).delivery ? (s.freeAbove || 0) : 0, dc: !!(s.apps || {}).discounts, announce: s.announce || '', policies: s.policies || {}, minOrder: (s.rules || {}).minOrder || 0, maxQty: (s.rules || {}).maxQty || 0, domain: (s.domain && s.domain.status === 'active') ? s.domain.name : '', pay: payMethods(s), reqPhone: planOf(s) === 'base' ? true : s.reqPhone !== false, receiptCode: isTopDesign(planOf(s)) ? (['none', 'barcode', 'qr'].includes(s.receiptCode) ? s.receiptCode : 'qr') : 'none', hero: s.hero || {}, heroVideo: s.heroVideo || '', banner: s.banner || {}, social: s.social || {}, products: (s.products || []).filter(p => full || p.on !== false).map(p => full ? Object.assign(pubProd(p), { cost: p.cost || 0, sku: p.sku || '' }) : (saleOn(s) ? Object.assign(pubProd(p), { price: salePx(s, p), was: p.price, badge: p.badge || '-' + s.sale.pct + '%' }) : pubProd(p))) });
+const pubStore = (s, full) => ({ slug: s.slug, name: s.name, logo: s.logo || '', currency: CURRENCIES.includes(s.currency) ? s.currency : 'GHS', cartWord: s.cartWord === 'bag' ? 'bag' : 'cart', about: s.about || '', whatsapp: (s.wa !== false && s.phone) ? s.phone : '', call: (s.wa === false && s.phone) ? s.phone : '', type: s.type || 'other', typeName: TYPES[s.type] || TYPES.other, types: (s.types && s.types.length ? s.types : [s.type || 'other']).filter(t => TYPES[t]), area: s.area || '', hours: s.hours || '', delivery: s.delivery || '', open: s.open !== false, accent: s.accent || '#d4001a', plan: planOf(s), theme: s.theme || 'classic', layout: s.layout || null, pal: s.pal || '', verified: !!s.verified, dl: !!(s.apps || {}).delivery, fee: (s.apps || {}).delivery ? (s.fee || 0) : 0, freeAbove: (s.apps || {}).delivery ? (s.freeAbove || 0) : 0, dc: !!(s.apps || {}).discounts, announce: s.announce || '', policies: s.policies || {}, minOrder: (s.rules || {}).minOrder || 0, maxQty: (s.rules || {}).maxQty || 0, domain: (s.domain && s.domain.status === 'active') ? s.domain.name : '', pay: payMethods(s), reqPhone: planOf(s) === 'base' ? true : s.reqPhone !== false, receiptCode: isTopDesign(planOf(s)) ? (['none', 'barcode', 'qr'].includes(s.receiptCode) ? s.receiptCode : 'qr') : 'none', hero: s.hero || {}, heroVideo: s.heroVideo || '', heroImgs: s.heroImgs || [], banner: s.banner || {}, social: s.social || {}, products: (s.products || []).filter(p => full || p.on !== false).map(p => full ? Object.assign(pubProd(p), { cost: p.cost || 0, sku: p.sku || '' }) : (saleOn(s) ? Object.assign(pubProd(p), { price: salePx(s, p), was: p.price, badge: p.badge || '-' + s.sale.pct + '%' }) : pubProd(p))) });
 /* ---------- seed sample store so the platform can be shown at once ---------- */
 async function addIdx(slug) { const x = (await kvGet('idx')) || { l: [] }; if (!x.l.includes(slug)) { x.l.push(slug); await kvSet('idx', x); } }
 const STYPE = { classic: 'food', noir: 'thrift', linen: 'thrift', fresh: 'home', tech: 'phones', soft: 'beauty', spotlight: 'shoes', corner: 'other' };
@@ -769,6 +770,18 @@ const handler = async (event) => {
         let url; try { url = await blobPut('hero/' + s.slug + '-' + Date.now() + '.mp4', dec.buffer, dec.contentType); } catch (e) { return J(400, { error: e.message }); }
         s.heroVideo = url; s.sv = (s.sv | 0) + 1; await kvSet('store:' + s.slug, s);
         return J(200, { ok: true, url });
+      }
+      if (M === 'POST' && p === '/api/seller/hero-images') {
+        // sets or clears ONE collage slot (index 0-3) at a time, never the whole set in one request - a single photo
+        // stays comfortably under the request-size limit, where sending up to 4 full photos together would not.
+        if (role !== 'owner') return J(403, { error: 'Only the store owner can change the banner photos.' });
+        const idx = Math.max(0, Math.min(3, Math.round(+b.index || 0)));
+        let imgs = (await pimgGet(s.slug, 'hero')).slice(0, 4);
+        if (b.remove || !b.img) { imgs.splice(idx, 1); }
+        else { const pi = await picIn(b.img, b, 'That photo', s.slug); if (pi.error) return J(400, { error: pi.error }); imgs[idx] = pi.img; imgs = imgs.filter(Boolean); }
+        imgs = imgs.slice(0, 4);
+        await pimgSet(s.slug, 'hero', imgs);
+        return J(200, { ok: true, imgs });
       }
       if (M === 'POST' && p === '/api/seller/store' && b.newSlug !== undefined) {
         if (role !== 'owner') return J(403, { error: 'Only the store owner can change the store handle.' });
