@@ -427,7 +427,7 @@ const handler = async (event) => {
       const ph = phoneKey(b.phone), em = emailKey(b.email), name = str(b.storeName, 40), pw = String(b.pin || '');
       if (name.length < 2) return J(400, { error: 'Give your store a name.' });
       if (!b.phone) return J(400, { error: 'Add a phone number so you can log in and get paid.' }); if (!ph) return J(400, { error: 'That phone number does not look right. Try 024 123 4567.' });
-      if (!b.email) return J(400, { error: 'Add an email so you can log in.' }); if (!em) return J(400, { error: 'That email does not look right.' });
+      if (b.email && !em) return J(400, { error: 'That email does not look right.' });   // email is optional: the phone number is the login, email just adds a login code and receipts
       const pe = passOk(pw); if (pe) return J(400, { error: pe });
       if ((ph && await kvGet('phone:' + ph)) || (em && await kvGet('email:' + em))) return J(409, { error: 'An account with those details already exists. Log in instead.' });
       let slug = slugify(b.slug || name) || 'shop'; if (RESERVED.includes(slug)) slug += '-shop'; let i = 1, base = slug; while (await kvGet('store:' + slug)) slug = base + '-' + (++i);
