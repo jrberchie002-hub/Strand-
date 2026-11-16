@@ -273,7 +273,16 @@ table.mx{border-collapse:collapse;width:100%;font-size:11.5px}table.mx th,table.
 .mz .sec{padding-top:14px}.mz .sec h3{margin:0 0 8px}.mz .grid{row-gap:14px}.mz .pc .in{padding:8px 2px 4px}.mz .pc .in .pp{margin:2px 0}.mz .promo{margin:14px 16px}
 .mz .wrap,.mz .sec{max-width:1180px}.mz .sf>.sec+.sec{margin-top:0}
 
-.hero.hascollage>.herocollage{position:absolute;inset:0}.mz .hero.hascollage{min-height:56vh;background:#111!important;display:flex;flex-direction:column;justify-content:flex-end;text-align:center}.mz .hero.hascollage .hcollagehead{width:100%;box-sizing:border-box;background:linear-gradient(0deg,rgba(0,0,0,.6),transparent);padding:60px 20px 32px}.mz .hero.hascollage .hcollagehead *{color:#fff}.mz.gb .hero.hascollage .hcollagehead .b,.mz.gb .hero.hascollage .hcollagehead button{background:#c9a24b!important;color:#111!important;border:0!important;border-radius:999px!important;padding:12px 28px!important}
+.hero.hascollage>.herocollage{position:absolute;inset:0}
+.mz .hero.hascollage{padding:0!important;min-height:min(64vh,600px);background:#111!important;display:flex;flex-direction:column;justify-content:flex-end;text-align:center}
+.mz .hero.hascollage .herocollage{gap:2px;background:#faf7f0}
+.mz .hero.hascollage:after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,rgba(0,0,0,.7) 0%,rgba(0,0,0,.25) 45%,rgba(0,0,0,0) 75%);z-index:1;pointer-events:none}
+.mz .hero.hascollage .hcollagehead{position:relative;z-index:2;width:100%;box-sizing:border-box;background:none!important;padding:40px 24px 34px;display:flex;flex-direction:column;align-items:center;gap:6px}
+.mz .hero.hascollage .hcollagehead *{color:#fff;text-shadow:0 1px 16px rgba(0,0,0,.4)}
+.mz .hero.hascollage .hcollagehead h1{font-family:Georgia,"Playfair Display",serif;font-weight:500;text-transform:none;letter-spacing:.4px;font-size:clamp(28px,4.4vw,50px);margin:0}
+.mz .hero.hascollage .hcollagehead p{text-transform:none;letter-spacing:.5px;font-size:14px;opacity:.95;margin:0}
+.mz.gb .hero.hascollage .hcollagehead .b,.mz.gb .hero.hascollage .hcollagehead button{background:#c9a24b!important;color:#111!important;text-shadow:none;border:0!important;border-radius:999px!important;padding:12px 28px!important;font-size:12px!important;font-weight:600;margin-top:8px}
+@media(max-width:600px){.mz .hero.hascollage .herocollage[data-n="4"],.mz .hero.hascollage .herocollage[data-n="3"]{grid-template-columns:repeat(2,1fr)}}
 .mz.gb .ann{background:#111;color:#e9d28a;border:0}
 .mz.gb .hero{border-radius:0;color:#fff}
 .mz.gb .hero:not([style*="url("]):not(.hascollage){background:radial-gradient(120% 140% at 85% 0%,#4a3811 0%,#1a1507 45%,#0b0b0b 100%)!important;color:#f3e2a9}
