@@ -820,20 +820,24 @@ function pickI(f,w,n){var fl=f.files[0];if(!fl)return;pickI2(f,w,fl,n)}
 function pickVideo(f){var fl=f.files[0];if(!fl)return;if(!/^video\//.test(fl.type)){toast('Please choose a video file');f.value='';return}if(fl.size>4.5*1024*1024){toast('That video is too big (max 4.5MB). Trim it or lower the quality.');f.value='';return}var vEl=document.createElement('video');vEl.preload='metadata';vEl.onloadedmetadata=function(){var dur=vEl.duration;URL.revokeObjectURL(vEl.src);if(dur>12){toast('Keep the video under 12 seconds.');f.value='';return}var r=new FileReader();r.onload=function(){toast('Uploading video…');api('POST','/api/seller/hero-video',{data:r.result,duration:dur}).then(function(){toast('Banner video saved');load()}).catch(function(e){toast(e.message)});f.value=''};r.readAsDataURL(fl)};vEl.onerror=function(){toast('Could not read that video');f.value=''};vEl.src=URL.createObjectURL(fl)}
 function removeHeroVideo(){api('POST','/api/seller/hero-video',{remove:true}).then(function(){toast('Banner video removed');load()}).catch(function(e){toast(e.message)})}
 function cropPhoto(fl,asp,mx,cb){var rd=new FileReader();rd.onload=function(){var im=new Image();im.onload=function(){
- var W=Math.min(380,window.innerWidth-48),H=Math.round(W/asp);if(H>window.innerHeight*.5){H=Math.round(window.innerHeight*.5);W=Math.round(H*asp)}
- var iw=im.width,ih=im.height,sMin=Math.max(W/iw,H/ih),z=1,ox=(W-iw*sMin)/2,oy=(H-ih*sMin)/2;
- var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px';
- ov.innerHTML='<div style="background:#fff;border-radius:18px;padding:18px;max-width:100%;box-sizing:border-box"><div style="font:700 17px Inter;margin-bottom:4px">Position your photo</div><div style="font:500 13px Inter;color:#555;margin-bottom:10px">Drag the photo to move it. Use the slider to zoom.</div><canvas id="crc" width="'+W+'" height="'+H+'" style="display:block;border-radius:10px;touch-action:none;cursor:grab;background:#eee;width:'+W+'px;height:'+H+'px"></canvas><input id="crz" type="range" min="1" max="3" step="0.01" value="1" style="width:100%;margin:14px 0 6px" aria-label="Zoom"><div style="display:flex;gap:10px"><button class="btn o" id="crx" style="flex:1">Cancel</button><button class="btn" id="cro" style="flex:2">Use this photo</button></div></div>';
- document.body.appendChild(ov);var c=ov.querySelector('#crc'),x=c.getContext('2d');
- function clamp(){var s=sMin*z;ox=Math.min(0,Math.max(W-iw*s,ox));oy=Math.min(0,Math.max(H-ih*s,oy))}
- function dr(){x.clearRect(0,0,W,H);x.drawImage(im,ox,oy,iw*sMin*z,ih*sMin*z)}
- clamp();dr();var dn=false,px=0,py=0;
+ var W=Math.min(380,window.innerWidth-48),H=Math.round(W/asp);if(H>window.innerHeight*.45){H=Math.round(window.innerHeight*.45);W=Math.round(H*asp)}
+ var iw=im.width,ih=im.height,sFit=Math.min(W/iw,H/ih),sFill=Math.max(W/iw,H/ih),sMax=sFill*3,sc=asp>1.5?sFill:sFit,ox=0,oy=0;
+ var ov=document.createElement('div');ov.style.cssText='position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px;overflow:auto';
+ ov.innerHTML='<div style="background:#fff;border-radius:18px;padding:18px;max-width:100%;box-sizing:border-box"><div style="font:700 17px Inter;margin-bottom:4px">Position your photo</div><div style="font:500 13px Inter;color:#555;margin-bottom:10px">This is how it will look. Drag to move. Slide to zoom in or out.</div><canvas id="crc" width="'+W+'" height="'+H+'" style="display:block;border-radius:10px;touch-action:none;cursor:grab;width:'+W+'px;height:'+H+'px;border:1px solid #ddd"></canvas><div style="display:flex;gap:8px;margin:12px 0 4px"><button class="btn o s" id="crf" style="flex:1">Show whole photo</button><button class="btn o s" id="crl" style="flex:1">Fill the frame</button></div><input id="crz" type="range" min="'+sFit+'" max="'+sMax+'" step="any" value="'+sc+'" style="width:100%;margin:8px 0 6px" aria-label="Zoom"><div style="display:flex;gap:10px"><button class="btn o" id="crx" style="flex:1">Cancel</button><button class="btn" id="cro" style="flex:2">Use this photo</button></div></div>';
+ document.body.appendChild(ov);var c=ov.querySelector('#crc'),x=c.getContext('2d'),zr=ov.querySelector('#crz');
+ function center(){ox=(W-iw*sc)/2;oy=(H-ih*sc)/2}
+ function clamp(){var w=iw*sc,h=ih*sc;ox=w<=W?(W-w)/2:Math.min(0,Math.max(W-w,ox));oy=h<=H?(H-h)/2:Math.min(0,Math.max(H-h,oy))}
+ function dr(){x.fillStyle='#fff';x.fillRect(0,0,W,H);x.drawImage(im,ox,oy,iw*sc,ih*sc)}
+ function setS(n){var cx=W/2,cy=H/2,k=n/sc;ox=cx-(cx-ox)*k;oy=cy-(cy-oy)*k;sc=n;zr.value=n;clamp();dr()}
+ center();clamp();dr();var dn=false,px=0,py=0;
  c.addEventListener('pointerdown',function(e){dn=true;px=e.clientX;py=e.clientY;try{c.setPointerCapture(e.pointerId)}catch(_){}c.style.cursor='grabbing'});
  c.addEventListener('pointermove',function(e){if(!dn)return;ox+=e.clientX-px;oy+=e.clientY-py;px=e.clientX;py=e.clientY;clamp();dr()});
  function up(){dn=false;c.style.cursor='grab'}c.addEventListener('pointerup',up);c.addEventListener('pointercancel',up);
- ov.querySelector('#crz').addEventListener('input',function(e){var nz=+e.target.value,cx=W/2,cy=H/2,k=nz/z;ox=cx-(cx-ox)*k;oy=cy-(cy-oy)*k;z=nz;clamp();dr()});
+ zr.addEventListener('input',function(e){setS(+e.target.value)});
+ ov.querySelector('#crf').onclick=function(){sc=sFit;center();zr.value=sc;clamp();dr()};
+ ov.querySelector('#crl').onclick=function(){sc=sFill;center();zr.value=sc;clamp();dr()};
  ov.querySelector('#crx').onclick=function(){ov.remove()};
- ov.querySelector('#cro').onclick=function(){var ow=asp>=1?mx:Math.round(mx*asp),oh=Math.round(ow/asp),k=ow/W,oc=document.createElement('canvas');oc.width=ow;oc.height=oh;var o=oc.getContext('2d');o.drawImage(im,ox*k,oy*k,iw*sMin*z*k,ih*sMin*z*k);ov.remove();cb(oc.toDataURL('image/jpeg',.78))};
+ ov.querySelector('#cro').onclick=function(){var ow=asp>=1?mx:Math.round(mx*asp),oh=Math.round(ow/asp),k=ow/W,oc=document.createElement('canvas');oc.width=ow;oc.height=oh;var o=oc.getContext('2d');o.fillStyle='#fff';o.fillRect(0,0,ow,oh);o.drawImage(im,ox*k,oy*k,iw*sc*k,ih*sc*k);ov.remove();cb(oc.toDataURL('image/jpeg',.8))};
 };im.src=rd.result};rd.readAsDataURL(fl)}
 function pickI2(f,w,fl,n){cropPhoto(fl,{h:16/9,l:1,i:1,o:1}[w]||1,{h:1600,l:400,i:900,o:400}[w]||1200,function(d){applyI2(w,d,n)})}
 function applyI2(w,d,n){if(w==='i'){IMGS[n]=d;var pv=$('ipv'+n);if(pv){pv.style.background='#f0f0f0 '+bg(d)+' center/cover';pv.textContent=''}var xb=$('ipx'+n);if(xb)xb.style.display='flex'}else if(w==='l'){LIMG=d;var lv=$('lgpv');if(lv)lv.style.background='#eee '+bg(d)+' center/cover';dAuto(50)}else if(w==='o'){OIMG=d;var ov=$('ownav');if(ov){ov.style.background='#eee '+bg(d)+' center/cover';ov.textContent=''}}else{HIMG=d;if(!window._bq)dAuto(50)}}
