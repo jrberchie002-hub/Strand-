@@ -206,7 +206,17 @@ const pimgKey = (slug, pid) => 'pimg:' + slug + ':' + pid;
 async function pimgGet(slug, pid) { const r = await kvGet(pimgKey(slug, pid)); return (r && r.imgs) || []; }
 async function pimgSet(slug, pid, imgs) { await kvSet(pimgKey(slug, pid), (imgs && imgs.length) ? { imgs } : null); }
 // attaches each product's photos (fetched from their own documents) onto in-memory products, for responses that need to show photos
+// one-time repair for shops whose handle was changed before photos moved with it: finds photos left under an old handle (from the shop's own log) and brings them home
+async function healPimg(s) {
+  try {
+    if (await kvGet('pimgheal:' + s.slug)) return;
+    const lg = (await kvGet('sec:' + s.slug)) || { l: [] }, olds = [...new Set(lg.l.map(x => (/^Store handle changed from @([a-z0-9-]+) to @/.exec(x.what || '') || [])[1]).filter(Boolean))];
+    for (const old of olds) for (const pid of ['hero'].concat((s.products || []).map(pr => pr.id))) { const im = await pimgGet(old, pid); if (im.length && !(await pimgGet(s.slug, pid)).length) { await pimgSet(s.slug, pid, im); await pimgSet(old, pid, []); } }
+    await kvSet('pimgheal:' + s.slug, { at: Date.now() });
+  } catch (e) {}
+}
 async function withProductImgs(s) {
+  await healPimg(s);
   const prods = s.products || []; const heroP = pimgGet(s.slug, 'hero');
   const imgsArr = prods.length ? await Promise.all(prods.map(pr => pimgGet(s.slug, pr.id))) : [];
   prods.forEach((pr, i) => { const imgs = imgsArr[i]; if (imgs.length) { pr.imgs = imgs; pr.img = imgs[0] || ''; } else if (pr.img && !(pr.imgs && pr.imgs.length)) { pr.imgs = [pr.img]; } });
@@ -982,6 +992,11 @@ const handler = async (event) => {
           s.email ? kvSet('email:' + s.email, { slug: ns }) : null,
           (s.domain && s.domain.name) ? kvSet('domain:' + s.domain.name, { slug: ns, status: s.domain.status }) : null,
         ].filter(Boolean));
+        // everything else keyed by the handle moves with it - product photos, banner photos, notes, chats - or it would look lost
+        { const pids = ['hero'].concat((s.products || []).map(pr => pr.id));
+          for (const pid of pids) { const im = await pimgGet(oldSlug, pid); if (im.length) { await pimgSet(ns, pid, im); await pimgSet(oldSlug, pid, []); } }
+          const nt = await kvGet('notes:' + oldSlug); if (nt) { await kvSet('notes:' + ns, nt); await kvSet('notes:' + oldSlug, null); }
+          const cix = await kvGet('chatidx:' + oldSlug); if (cix) { for (const r of (cix.l || [])) { const th = await kvGet('chat:' + oldSlug + ':' + r.custId); if (th) { await kvSet('chat:' + ns + ':' + r.custId, th); await kvSet('chat:' + oldSlug + ':' + r.custId, null); } } await kvSet('chatidx:' + ns, cix); await kvSet('chatidx:' + oldSlug, null); } }
         const idxDoc = (await kvGet('idx')) || { l: [] }; const ix = idxDoc.l.indexOf(oldSlug); if (ix > -1) { idxDoc.l[ix] = ns; await kvSet('idx', idxDoc); }
         s.slug = ns; s.slugChanges = used2 + 1; s.sv = (s.sv | 0) + 1;
         await kvSet('store:' + ns, s);
