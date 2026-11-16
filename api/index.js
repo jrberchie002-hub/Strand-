@@ -449,6 +449,28 @@ const handler = async (event) => {
       if (inviteRec) { const inv2 = (await kvGet('invites')) || { l: [] }, rec2 = inv2.l.find(x => x.id === inviteRec.id); if (rec2) { rec2.usedAt = new Date().toISOString(); rec2.usedSlug = slug; } await kvSet('invites', inv2); }
       return J(200, { token: tok(s, 'owner'), slug });
     }
+    if (M === 'GET' && (m = p.match(/^\/api\/handover\/([A-Za-z0-9]{4,12})$/))) {
+      if (limited(ip, 'ho', 40, 600e3)) return J(429, { error: 'Too many tries. Wait a little.' });
+      const ho = await kvGet('handover:' + m[1].toUpperCase()); if (!ho || ho.usedAt || Date.now() > ho.exp) return J(404, { error: 'This link is no longer valid. Ask for a new one.' });
+      const hs = await kvGet('store:' + ho.slug); if (!hs) return J(404, { error: 'This link is no longer valid.' });
+      return J(200, { name: hs.name });
+    }
+    if (M === 'POST' && p === '/api/handover/claim') {
+      if (limited(ip, 'hc', 8, 3600e3)) return J(429, { error: 'Too many tries. Wait a little and try again.' });
+      const code = str(b.code, 12).toUpperCase(), ho = await kvGet('handover:' + code); if (!ho || ho.usedAt || Date.now() > ho.exp) return J(404, { error: 'This link is no longer valid. Ask for a new one.' });
+      const hs = await kvGet('store:' + ho.slug); if (!hs) return J(404, { error: 'This link is no longer valid.' });
+      const ph = phoneKey(b.phone), em = emailKey(b.email), pw = String(b.pin || '');
+      if (!ph) return J(400, { error: 'That phone number does not look right. Try 024 123 4567.' });
+      if (b.email && !em) return J(400, { error: 'That email does not look right.' });
+      const pe = passOk(pw); if (pe) return J(400, { error: pe });
+      const ph0 = await kvGet('phone:' + ph), em0 = em ? await kvGet('email:' + em) : null;
+      if ((ph0 && ph0.slug !== hs.slug) || (em0 && em0.slug !== hs.slug)) return J(409, { error: 'An account with those details already exists. Use different details, or log in.' });
+      if (hs.phone && hs.phone !== ph) await kvSet('phone:' + hs.phone, null); if (hs.email && hs.email !== em) await kvSet('email:' + hs.email, null);
+      hs.phone = ph; hs.email = em; hs.salt = crypto.randomBytes(16).toString('hex'); hs.pin = pinHash(pw, hs.salt); hs.wa = true; hs.sv = (hs.sv | 0) + 1; hs.nameChanges = 0; delete hs.sample; hs.staff = [];
+      await kvSet('store:' + hs.slug, hs); await kvSet('phone:' + ph, { slug: hs.slug }); if (em) await kvSet('email:' + em, { slug: hs.slug });
+      ho.usedAt = new Date().toISOString(); await kvSet('handover:' + code, ho); await secLog(hs.slug, 'Shop taken over by its new owner through a handover link', ip);
+      return J(200, { token: tok(hs, 'owner'), slug: hs.slug });
+    }
     if (M === 'POST' && p === '/api/login') {
       if (limited(ip, 'li', 12, 600e3)) return J(429, { error: 'Too many tries. Wait a few minutes and try again.' });
       const key = acctKey(b.id || b.phone), lk = 'fail:' + (key || 'x'), f = (await kvGet(lk)) || { n: 0, until: 0 };
@@ -827,6 +849,13 @@ const handler = async (event) => {
         invR.l = invR.l.slice(0, 500);
         await kvSet('invites', invR); await secLog('platform', 'Created an invite link for ' + b.plan + ' (' + pm.name + ')', ip);
         return J(200, { id });
+      }
+      if (M === 'POST' && p === '/api/platform/handover') {
+        if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to edit stores.' });
+        const sh = await kvGet('store:' + str(b.slug, 40)); if (!sh) return J(404, { error: 'No such shop' });
+        const AL = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; let code; do { code = Array.from(crypto.randomBytes(6), x => AL[x % AL.length]).join(''); } while (await kvGet('handover:' + code));
+        await kvSet('handover:' + code, { slug: sh.slug, exp: Date.now() + 14 * 864e5, by: pm.name, usedAt: '' });
+        await secLog('platform', 'Made a handover link for ' + sh.slug + ' (' + pm.name + ')', ip); return J(200, { code });
       }
       if (M === 'POST' && p === '/api/platform/impersonate') {
         if (!pcan('shops_edit')) return J(403, { error: 'You do not have access to edit stores.' });
